@@ -1,0 +1,6 @@
+{
+  "name": "Checkify",
+  "description": "Multi-user checklist app with photo verification, task nesting, and secure public sharing with PDF exports.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
