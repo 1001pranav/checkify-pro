@@ -119,14 +119,28 @@ export default function Dashboard() {
     const sourceIndex = result.source.index;
     const destIndex = result.destination.index;
 
-    // Filtered items shown in current view
-    const reordered: Checklist[] = Array.from(filtered);
-    const [removed] = reordered.splice(sourceIndex, 1);
-    reordered.splice(destIndex, 0, removed);
+    // 1. Get the new order of the visible subset
+    const reorderedFiltered: Checklist[] = Array.from(filtered);
+    const [removed] = reorderedFiltered.splice(sourceIndex, 1);
+    reorderedFiltered.splice(destIndex, 0, removed);
 
+    // 2. Map the new order back into the full list, preserving positions of hidden items
+    const newFullOrder = [...sortedChecklists];
+    const filteredIds = new Set(filtered.map(l => l.id));
+    let filteredPtr = 0;
+    
+    newFullOrder.forEach((list, i) => {
+      if (filteredIds.has(list.id)) {
+        newFullOrder[i] = reorderedFiltered[filteredPtr++];
+      }
+    });
+
+    // 3. Update all positions in a batch
     const batch = writeBatch(db);
-    reordered.forEach((list, index) => {
-      batch.update(doc(db, 'checklists', list.id), { position: index });
+    newFullOrder.forEach((list, index) => {
+      if (list.position !== index) {
+        batch.update(doc(db, 'checklists', list.id), { position: index });
+      }
     });
     
     await batch.commit();

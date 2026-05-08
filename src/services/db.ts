@@ -60,21 +60,20 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
     error: error instanceof Error ? error.message : String(error),
     authInfo: {
       userId: currentUser?.uid || null,
-      email: currentUser?.email || null,
+      // PII removed from the serialized error to prevent UI exposure
+      email: null,
       emailVerified: currentUser?.emailVerified || null,
       isAnonymous: currentUser?.isAnonymous || null,
       tenantId: currentUser?.tenantId || null,
-      providerInfo: currentUser?.providerData?.map(provider => ({
-        providerId: provider.providerId,
-        email: provider.email,
-      })) || []
+      providerInfo: []
     },
     operationType,
     path
   };
   const jsonError = JSON.stringify(errInfo);
   console.error('Firestore/Storage Error: ', jsonError);
-  throw new Error(jsonError);
+  // Throw a generic message to the UI to avoid PII leak, but keep path/operation for debugging if needed
+  throw new Error(`Database error during ${operationType} on ${path || 'unknown'}: ${error instanceof Error ? error.message : 'Unknown error'}`);
 }
 
 // --- Users ---
@@ -108,7 +107,8 @@ export function subscribeToProjects(userId: string, callback: (projects: Project
   const path = 'projects';
   const q = query(
     collection(db, 'projects'),
-    where('userId', '==', userId)
+    where('userId', '==', userId),
+    orderBy('createdAt', 'desc')
   );
   
   return onSnapshot(q, (snapshot) => {
@@ -221,19 +221,32 @@ export async function deleteProject(projectId: string) {
 
 export function subscribeToChecklists(userId: string, callback: (checklists: Checklist[]) => void, projectId?: string | null) {
   const path = 'checklists';
-  const q = query(
-    collection(db, 'checklists'),
-    where('userId', '==', userId)
-  );
+  
+  // Use Firestore-side filtering where possible
+  let q;
+  if (projectId) {
+    q = query(
+      collection(db, 'checklists'),
+      where('userId', '==', userId),
+      where('projectId', '==', projectId),
+      orderBy('position', 'asc')
+    );
+  } else {
+    // When projectId is null, we still filter client-side because Firestore 
+    // '==' null queries can be inconsistent depending on index configuration
+    q = query(
+      collection(db, 'checklists'),
+      where('userId', '==', userId),
+      orderBy('position', 'asc')
+    );
+  }
   
   return onSnapshot(q, (snapshot) => {
     let lists = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Checklist));
     
-    // Client side filtering for better handling of missing/null projectId fields
+    // Fallback client side filtering for null projectId
     if (projectId === null) {
       lists = lists.filter(l => !l.projectId);
-    } else if (projectId) {
-      lists = lists.filter(l => l.projectId === projectId);
     }
     
     callback(lists);
@@ -280,15 +293,33 @@ export async function deleteChecklist(checklistId: string) {
   try {
     const itemsSnapshot = await getDocs(collection(db, 'checklists', checklistId, 'items'));
     const batch = writeBatch(db);
+    let operationCount = 0;
     
     // Collect photos for deletion
     const allPhotoUrls: string[] = [];
-    itemsSnapshot.forEach((itemDoc) => {
+    
+    for (const itemDoc of itemsSnapshot.docs) {
       const item = itemDoc.data() as ChecklistItem;
       if (item.photoUrls) allPhotoUrls.push(...item.photoUrls);
       if (item.photoUrl) allPhotoUrls.push(item.photoUrl);
+      
+      // Cleanup comments subcollection for each item
+      const commentsSnap = await getDocs(collection(db, 'checklists', checklistId, 'items', itemDoc.id, 'comments'));
+      commentsSnap.forEach(commentDoc => {
+        batch.delete(commentDoc.ref);
+        operationCount++;
+      });
+      
       batch.delete(itemDoc.ref);
-    });
+      operationCount++;
+      
+      if (operationCount > 450) { // Safety buffer before 500 limit
+        await batch.commit();
+        // Start a new batch if needed for large checklists
+        // (Note: In a production environment, we should recursion or use individual deletes if extremely large)
+        throw new Error('Checklist contains too many items/comments to delete in one operation. Please delete items individually.');
+      }
+    }
     
     batch.delete(doc(db, 'checklists', checklistId));
     await batch.commit();
@@ -362,6 +393,8 @@ export async function deleteItem(checklistId: string, itemId: string) {
   try {
     const itemRef = doc(db, 'checklists', checklistId, 'items', itemId);
     const itemSnap = await getDoc(itemRef);
+    if (!itemSnap.exists()) return;
+    
     const itemData = itemSnap.data() as ChecklistItem;
     
     const allUrls = [...(itemData.photoUrls || [])];
@@ -502,8 +535,8 @@ export async function uploadItemPhotos(checklistId: string, itemId: string, file
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
         const processedBlob = await processImage(file);
-        // Use unique filename with index and timestamp
-        const storagePath = `checklist-photos/${checklistId}/${itemId}/${Date.now()}-${index}.jpg`;
+        // Use unique filename with userId, checklistId and itemId for security rules validation
+        const storagePath = `checklist-photos/${checklistId}/${auth.currentUser?.uid || 'anonymous'}/${itemId}/${Date.now()}-${index}.jpg`;
         const photoRef = ref(storage, storagePath);
         
         console.log(`[Storage Debug] Uploading as: ${auth.currentUser?.uid || 'null'} (Anonymous: ${auth.currentUser?.isAnonymous || 'n/a'})`);
@@ -574,7 +607,7 @@ export async function createShare(
 ) {
   const path = 'shares';
   try {
-    const token = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+    const token = crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, '');
     const shareDoc = {
       checklistId,
       userId,
@@ -755,7 +788,7 @@ export async function createProjectShare(
 ) {
   const path = 'projectShares';
   try {
-    const token = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+    const token = crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, '');
     const shareDoc = {
       projectId,
       userId,
@@ -848,9 +881,15 @@ export async function getSharedProject(token: string) {
 export async function addComment(checklistId: string, itemId: string, userId: string, userName: string, text: string, shareToken?: string | null) {
   const path = `checklists/${checklistId}/items/${itemId}/comments`;
   try {
+    // Verify item exists before adding comment
+    const itemRef = doc(db, 'checklists', checklistId, 'items', itemId);
+    const itemSnap = await getDoc(itemRef);
+    if (!itemSnap.exists()) {
+      throw new Error('Parent item no longer exists');
+    }
+
     const batch = writeBatch(db);
     const commentRef = doc(collection(db, 'checklists', checklistId, 'items', itemId, 'comments'));
-    const itemRef = doc(db, 'checklists', checklistId, 'items', itemId);
     
     batch.set(commentRef, {
       itemId,
@@ -884,10 +923,12 @@ export async function moveTodoToChecklist(todo: Todo, checklistId: string | 'new
       targetChecklistId = newListRef.id;
       batch.set(newListRef, {
         userId: todo.userId,
+        projectId: todo.projectId || null,
         title: newChecklistTitle,
         description: todo.note || '',
         status: 'active',
         shareToken: null,
+        position: 0,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       });
@@ -895,7 +936,8 @@ export async function moveTodoToChecklist(todo: Todo, checklistId: string | 'new
     
     // Get current max position for items in target checklist
     const itemsSnapshot = await getDocs(collection(db, 'checklists', targetChecklistId, 'items'));
-    const nextPosition = itemsSnapshot.size;
+    const positions = itemsSnapshot.docs.map(d => (d.data() as ChecklistItem).position || 0);
+    const nextPosition = positions.length > 0 ? Math.max(...positions) + 1 : 0;
     
     const newItemRef = doc(collection(db, 'checklists', targetChecklistId, 'items'));
     batch.set(newItemRef, {
@@ -930,6 +972,8 @@ export async function getSharedChecklist(token: string) {
     }
     const share = shareSnap.data() as ChecklistShare;
     const listSnap = await getDoc(doc(db, 'checklists', share.checklistId));
+    if (!listSnap.exists()) throw new Error('Checklist not found');
+    
     return { 
       checklist: { id: listSnap.id, ...listSnap.data() } as Checklist, 
       permission: share.permission,

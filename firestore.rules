@@ -8,11 +8,23 @@ service cloud.firestore {
 
     // --- Helpers ---
     function isSignedIn() { return request.auth != null; }
-    function isVerified() { return isSignedIn() && request.auth.token.email_verified == true; }
-    function isOwner(userId) { return isVerified() && request.auth.uid == userId; }
+    function isAnonymous() { return isSignedIn() && request.auth.token.firebase.sign_in_provider == 'anonymous'; }
+    function isVerified() { return isSignedIn() && (request.auth.token.email_verified == true || isAnonymous()); }
+    function isOwner(userId) { return isSignedIn() && request.auth.uid == userId; }
     function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
     function incoming() { return request.resource.data; }
     function existing() { return resource.data; }
+
+    function isCollaborator(token, resourceId, type) {
+      let share = type == 'project' ? 
+        get(/databases/$(database)/documents/projectShares/$(token)).data :
+        get(/databases/$(database)/documents/shares/$(token)).data;
+      
+      return isSignedIn() && 
+             share != null && 
+             share.revoked == false && 
+             (type == 'project' ? share.projectId == resourceId : share.checklistId == resourceId);
+    }
     
     // --- Users ---
     match /users/{userId} {
@@ -279,7 +291,7 @@ service cloud.firestore {
                (data.createdAt == request.time || data.createdAt is timestamp);
       }
 
-      allow get: if isValidId(token);
+      allow get: if isValidId(token) && isSignedIn();
       allow list: if isVerified() && (
         resource.data.userId == request.auth.uid || 
         get(/databases/$(database)/documents/checklists/$(resource.data.checklistId)).data.userId == request.auth.uid
@@ -316,7 +328,7 @@ service cloud.firestore {
                (data.createdAt == request.time || data.createdAt is timestamp);
       }
 
-      allow get: if isValidId(token);
+      allow get: if isValidId(token) && isSignedIn();
       allow list: if isVerified() && (
         resource.data.userId == request.auth.uid || 
         isProjectOwner(resource.data.projectId)

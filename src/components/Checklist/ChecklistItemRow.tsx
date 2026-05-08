@@ -17,14 +17,16 @@ interface ChecklistItemRowProps {
   indent: number;
   readOnly?: boolean;
   onToggle: (id: string, isDone: boolean) => void;
-  onUpdateText: (id: string, text: string) => void;
+  onUpdate: (id: string, updates: Partial<ChecklistItem>) => void;
   onDelete: (id: string) => void;
   onIndent: (id: string, direction: 'in' | 'out') => void;
   onAddSubItem: (parentId: string) => void;
-  onPhotoUpload: (id: string, file: File | React.ChangeEvent<HTMLInputElement>) => void;
+  onPhotoUpload: (id: string, e: React.ChangeEvent<HTMLInputElement>) => void;
   onPhotoDelete?: (itemId: string, photoUrl: string) => void;
   onPhotosRearrange?: (itemId: string, photoUrls: string[]) => void;
   onToggleCollapse?: (itemId: string, isCollapsed: boolean) => void;
+  autoFocus?: boolean;
+  onFocused?: () => void;
   userId?: string;
   userName?: string;
   checklistId?: string;
@@ -37,7 +39,7 @@ export const ChecklistItemRow: React.FC<ChecklistItemRowProps> = ({
   indent,
   readOnly = false,
   onToggle,
-  onUpdateText,
+  onUpdate,
   onDelete,
   onIndent,
   onAddSubItem,
@@ -45,6 +47,8 @@ export const ChecklistItemRow: React.FC<ChecklistItemRowProps> = ({
   onPhotoDelete,
   onPhotosRearrange,
   onToggleCollapse,
+  autoFocus,
+  onFocused,
   userId,
   userName,
   checklistId,
@@ -56,8 +60,15 @@ export const ChecklistItemRow: React.FC<ChecklistItemRowProps> = ({
   const [isPhotosCollapsed, setIsPhotosCollapsed] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState(item.text);
+  const [isEditingDesc, setIsEditingDesc] = useState(false);
+  const [editDesc, setEditDesc] = useState(item.description || '');
   const [localPhotos, setLocalPhotos] = useState<string[]>([]);
   const [isReordering, setIsReordering] = useState(false);
+
+  useEffect(() => {
+    setEditText(item.text);
+    setEditDesc(item.description || '');
+  }, [item.text, item.description]);
 
   useEffect(() => {
     const derived = Array.from(new Set([
@@ -69,10 +80,24 @@ export const ChecklistItemRow: React.FC<ChecklistItemRowProps> = ({
     }
   }, [item.photoUrls, item.photoUrl, isReordering]);
 
+  useEffect(() => {
+    if (autoFocus) {
+      setIsEditing(true);
+      onFocused?.();
+    }
+  }, [autoFocus, onFocused]);
+
   const handleBlur = () => {
     setIsEditing(false);
     if (editText !== item.text) {
-      onUpdateText(item.id, editText);
+      onUpdate(item.id, { text: editText });
+    }
+  };
+
+  const handleDescBlur = () => {
+    setIsEditingDesc(false);
+    if (editDesc !== (item.description || '')) {
+      onUpdate(item.id, { description: editDesc });
     }
   };
 
@@ -83,6 +108,13 @@ export const ChecklistItemRow: React.FC<ChecklistItemRowProps> = ({
     if (e.key === 'Escape') {
       setEditText(item.text);
       setIsEditing(false);
+    }
+  };
+
+  const handleDescKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Escape') {
+      setEditDesc(item.description || '');
+      setIsEditingDesc(false);
     }
   };
 
@@ -177,41 +209,121 @@ export const ChecklistItemRow: React.FC<ChecklistItemRowProps> = ({
           </div>
           
           <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2">
-              {isEditing && !readOnly ? (
-                <input 
-                  autoFocus
-                  className={cn(
-                    "w-full bg-transparent border-none focus:ring-0 p-0 text-sm md:text-base font-bold transition-all outline-none",
-                    item.isDone ? 'text-slate-400' : 'text-slate-900'
-                  )}
-                  value={editText}
-                  onChange={(e) => setEditText(e.target.value)}
-                  onBlur={handleBlur}
-                  onKeyDown={handleKeyDown}
-                />
-              ) : (
-                <div 
-                  onClick={() => !readOnly && setIsEditing(true)}
-                  className={cn(
-                    "w-full text-sm md:text-base font-bold transition-all cursor-text",
-                    item.isDone ? 'text-slate-400 line-through' : 'text-slate-900'
-                  )}
-                >
-                  <ReactMarkdown 
-                    components={{
-                      p: ({children}) => <p className="m-0">{children}</p>,
-                      a: ({...props}) => <a {...props} className="text-indigo-600 underline" target="_blank" rel="noopener noreferrer" />,
-                    }}
+            <div className="flex flex-col gap-1">
+              <div className="flex items-center gap-2">
+                {isEditing && !readOnly ? (
+                  <input 
+                    autoFocus
+                    className={cn(
+                      "w-full bg-transparent border-none focus:ring-0 p-0 text-sm md:text-base font-bold transition-all outline-none",
+                      item.isDone ? 'text-slate-400' : 'text-slate-900'
+                    )}
+                    value={editText}
+                    onChange={(e) => setEditText(e.target.value)}
+                    onBlur={handleBlur}
+                    onKeyDown={handleKeyDown}
+                  />
+                ) : (
+                  <div 
+                    onClick={() => !readOnly && setIsEditing(true)}
+                    className={cn(
+                      "w-full text-sm md:text-base font-bold transition-all cursor-text",
+                      item.isDone ? 'text-slate-400 line-through' : 'text-slate-900'
+                    )}
                   >
-                    {item.text}
-                  </ReactMarkdown>
+                    <ReactMarkdown 
+                      components={{
+                        p: ({children}) => <p className="m-0">{children}</p>,
+                        a: ({...props}) => <a {...props} className="text-indigo-600 underline" target="_blank" rel="noopener noreferrer" />,
+                      }}
+                    >
+                      {item.text}
+                    </ReactMarkdown>
+                  </div>
+                )}
+                {item.fromTodo && (
+                  <Badge variant="outline" className="text-[7px] md:text-[8px] px-1 h-3.5 md:h-4 border-slate-900 font-black uppercase tracking-tighter shrink-0 bg-indigo-50">
+                    Todo
+                  </Badge>
+                )}
+              </div>
+
+              {/* Description Field */}
+              {(item.description || isEditingDesc || !readOnly) && (
+                <div className="mt-1">
+                  {isEditingDesc && !readOnly ? (
+                    <textarea
+                      autoFocus
+                      className="w-full bg-slate-50 border-2 border-slate-200 rounded-lg p-2 text-xs md:text-sm font-medium focus:ring-0 focus:border-indigo-600 outline-none min-h-[60px] resize-y"
+                      placeholder="Add more details or outcome info..."
+                      value={editDesc}
+                      onChange={(e) => setEditDesc(e.target.value)}
+                      onBlur={handleDescBlur}
+                      onKeyDown={handleDescKeyDown}
+                    />
+                  ) : (
+                    <div 
+                      onClick={() => !readOnly && setIsEditingDesc(true)}
+                      className={cn(
+                        "text-[10px] md:text-xs font-medium cursor-text italic",
+                        item.isDone ? 'text-slate-400' : 'text-slate-500',
+                        !item.description && !readOnly && "opacity-0 group-hover:opacity-100 transition-opacity"
+                      )}
+                    >
+                      {item.description ? (
+                        <div className="prose prose-slate prose-xs max-w-none">
+                          <ReactMarkdown 
+                            components={{
+                              p: ({children}) => <p className="m-0">{children}</p>,
+                              a: ({...props}) => <a {...props} className="text-indigo-600 underline" target="_blank" rel="noopener noreferrer" />,
+                            }}
+                          >
+                            {item.description}
+                          </ReactMarkdown>
+                        </div>
+                      ) : (
+                        <span>+ Add description / outcome details...</span>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
-              {item.fromTodo && (
-                <Badge variant="outline" className="text-[7px] md:text-[8px] px-1 h-3.5 md:h-4 border-slate-900 font-black uppercase tracking-tighter shrink-0 bg-indigo-50">
-                  Todo
-                </Badge>
+
+              {/* Outcome Status */}
+              {item.isDone && (
+                <div className="flex items-center gap-2 mt-2">
+                  <span className="text-[8px] font-black uppercase tracking-widest text-slate-400">Execution Result:</span>
+                  <div className="flex gap-1">
+                    <Button 
+                      variant="ghost" 
+                      size="sm" 
+                      onClick={() => onUpdate(item.id, { outcome: item.outcome === 'success' ? 'none' : 'success' })}
+                      disabled={readOnly}
+                      className={cn(
+                        "h-6 px-2 text-[8px] font-black uppercase rounded-md border-2 transition-all",
+                        item.outcome === 'success' 
+                          ? "bg-emerald-500 text-white border-emerald-600 shadow-sm" 
+                          : "bg-white text-emerald-600 border-emerald-100 hover:border-emerald-500"
+                      )}
+                    >
+                      Success
+                    </Button>
+                    <Button 
+                      variant="ghost" 
+                      size="sm" 
+                      onClick={() => onUpdate(item.id, { outcome: item.outcome === 'failure' ? 'none' : 'failure' })}
+                      disabled={readOnly}
+                      className={cn(
+                        "h-6 px-2 text-[8px] font-black uppercase rounded-md border-2 transition-all",
+                        item.outcome === 'failure' 
+                          ? "bg-rose-500 text-white border-rose-600 shadow-sm" 
+                          : "bg-white text-rose-600 border-rose-100 hover:border-rose-500"
+                      )}
+                    >
+                      Failure
+                    </Button>
+                  </div>
+                </div>
               )}
             </div>
           </div>

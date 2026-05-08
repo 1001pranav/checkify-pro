@@ -24,7 +24,7 @@ import {
   Shield,
   ExternalLink
 } from 'lucide-react';
-import { Checkbox } from '@/components/ui/checkbox';
+import { TodoItem } from '@/src/components/Todo/TodoItem';
 import {
   Dialog,
   DialogContent,
@@ -66,6 +66,11 @@ export default function SharedProject() {
           setTodos(data.todos);
           setPermission(data.permission);
           
+          // Ensure guest is signed in if they need to edit
+          if (!auth.currentUser && data.permission === 'edit') {
+            await signInAnonymously(auth);
+          }
+
           // Store token for sub-pages (e.g., ChecklistDetail)
           sessionStorage.setItem(`project_share_${data.project.id}`, token);
         }
@@ -87,13 +92,29 @@ export default function SharedProject() {
     
     setItemLoading(true);
     try {
-      // Use project owner's userId if guest is not logged in
-      const creatorId = user?.uid || project.userId;
-      await createChecklist(creatorId, newTitle.trim(), '', checklists.length, project.id, token);
+      // Use project owner's userId ONLY as a fallback if auth failed (should be anonymous now)
+      const creatorId = auth.currentUser?.uid || user?.uid || project.userId;
+      const newList = await createChecklist(creatorId, newTitle.trim(), '', checklists.length, project.id, token);
+      
+      if (newList) {
+        const listData: Checklist = {
+          id: newList.id,
+          userId: creatorId,
+          projectId: project.id,
+          title: newTitle.trim(),
+          description: '',
+          status: 'active',
+          shareToken: token,
+          position: checklists.length,
+          createdAt: Timestamp.now(),
+          updatedAt: Timestamp.now()
+        };
+        setChecklists(prev => [...prev, listData]);
+      }
+
       toast.success('Checklist added to project');
       setNewTitle('');
       setIsChecklistDialogOpen(false);
-      window.location.reload();
     } catch (err) {
       console.error('Create checklist error:', err);
       toast.error('Operation restricted or failed');
@@ -108,12 +129,27 @@ export default function SharedProject() {
     
     setItemLoading(true);
     try {
-      const creatorId = user?.uid || project.userId;
-      await createTodo(creatorId, newTitle.trim(), '', project.id, token);
+      const creatorId = auth.currentUser?.uid || user?.uid || project.userId;
+      const newTodo = await createTodo(creatorId, newTitle.trim(), '', project.id, token);
+      
+      if (newTodo) {
+        const todoData: Todo = {
+          id: newTodo.id,
+          userId: creatorId,
+          projectId: project.id,
+          title: newTitle.trim(),
+          note: '',
+          isDone: false,
+          shareToken: token,
+          createdAt: Timestamp.now(),
+          updatedAt: Timestamp.now()
+        };
+        setTodos(prev => [todoData, ...prev]);
+      }
+
       toast.success('Todo added to project');
       setNewTitle('');
       setIsTodoDialogOpen(false);
-      window.location.reload();
     } catch (err) {
       console.error('Create todo error:', err);
       toast.error('Failed to add todo');
@@ -122,15 +158,15 @@ export default function SharedProject() {
     }
   };
 
-  const handleToggleTodo = async (todo: Todo) => {
+  const handleToggleTodo = async (todoId: string, updates: Partial<Todo>) => {
     if (!canEdit) {
       toast.error('View-only access');
       return;
     }
     try {
       // Pass token for security rules validation
-      await updateTodo(todo.id, { isDone: !todo.isDone }, token);
-      setTodos(prev => prev.map(t => t.id === todo.id ? { ...t, isDone: !t.isDone } : t));
+      await updateTodo(todoId, updates, token);
+      setTodos(prev => prev.map(t => t.id === todoId ? { ...t, ...updates } : t));
     } catch (err) {
        console.error('Update todo error:', err);
        toast.error('Failed to update task');
@@ -180,8 +216,8 @@ export default function SharedProject() {
         <AlertCircle className="w-16 h-16 text-rose-500 mb-4" />
         <h1 className="text-2xl font-black uppercase text-slate-900 mb-2">Access Denied</h1>
         <p className="text-slate-500 max-w-md mb-8">{error || 'This project link is no longer active.'}</p>
-        <Button render={<Link to="/auth" />} className="bento-button bg-slate-900 text-white px-8">
-          Return to Portal
+        <Button asChild className="bento-button bg-slate-900 text-white px-8">
+          <Link to="/auth">Return to Portal</Link>
         </Button>
       </div>
     );
@@ -202,8 +238,8 @@ export default function SharedProject() {
               </p>
             </div>
           </div>
-          <Button render={<Link to="/auth" />} variant="outline" className="h-9 border-2 border-slate-900 font-black uppercase text-[10px] rounded-xl hover:bg-slate-900 hover:text-white transition-all">
-            Sign In to Save <ExternalLink className="w-3 h-3 ml-2" />
+          <Button asChild variant="outline" className="h-9 border-2 border-slate-900 font-black uppercase text-[10px] rounded-xl hover:bg-slate-900 hover:text-white transition-all">
+            <Link to="/auth">Sign In to Save <ExternalLink className="w-3 h-3 ml-2" /></Link>
           </Button>
         </div>
       </header>
@@ -275,9 +311,13 @@ export default function SharedProject() {
                        <p className="text-slate-500 text-xs line-clamp-2 italic mb-4">{list.description || 'No description'}</p>
                     </CardContent>
                     <CardFooter className="bg-slate-50 p-4 border-t-2 border-slate-900 flex justify-end">
-                       <Button render={<Link to={`/share/${list.shareToken}`} />} variant="outline" className="h-8 border-2 border-slate-900 font-black uppercase text-[10px] rounded-lg">
-                         View Protocol <ExternalLink className="w-3 h-3 ml-2" />
-                       </Button>
+                       {list.shareToken && (
+                         <Button asChild variant="outline" className="h-8 border-2 border-slate-900 font-black uppercase text-[10px] rounded-lg">
+                           <Link to={`/share/${list.shareToken}`}>
+                             View Protocol <ExternalLink className="w-3 h-3 ml-2" />
+                           </Link>
+                         </Button>
+                       )}
                     </CardFooter>
                   </Card>
                 ))}
@@ -288,23 +328,14 @@ export default function SharedProject() {
           <TabsContent value="todos">
              <div className="space-y-4">
                {todos.map(todo => (
-                 <div key={todo.id} className="flex items-center gap-4 bg-white p-4 rounded-2xl border-2 border-slate-900 shadow-bento">
-                   <Checkbox 
-                    checked={todo.isDone} 
-                    onCheckedChange={() => handleToggleTodo(todo)}
-                    className="w-5 h-5 border-2 border-slate-900" 
-                    disabled={!canEdit}
-                   />
-                   <div className="flex-1">
-                     <h4 className={`font-black uppercase text-sm ${todo.isDone ? 'line-through text-slate-400' : 'text-slate-900'}`}>{todo.title}</h4>
-                     {todo.note && <p className="text-[10px] italic text-slate-500">{todo.note}</p>}
-                   </div>
-                   {canEdit && (
-                     <Button variant="ghost" size="icon" className="text-destructive opacity-0 group-hover:opacity-100" onClick={() => handleDeleteTodo(todo.id)}>
-                       <Trash2 className="w-4 h-4" />
-                     </Button>
-                   )}
-                 </div>
+                 <TodoItem 
+                   key={todo.id}
+                   todo={todo}
+                   onToggle={() => handleToggleTodo(todo.id, { isDone: !todo.isDone })}
+                   onUpdate={(updates) => handleToggleTodo(todo.id, updates)}
+                   onDelete={() => handleDeleteTodo(todo.id)}
+                   readOnly={!canEdit}
+                 />
                ))}
                {todos.length === 0 && <div className="text-center py-12 text-slate-400 font-black uppercase">No tasks available</div>}
              </div>

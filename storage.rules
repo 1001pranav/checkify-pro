@@ -6,17 +6,17 @@ service firebase.storage {
       allow read: if true;
     }
 
-    // Checklist photos: Allow creation for anyone if it's a valid image (supports guest audits)
-    // Identity is tracked via custom metadata in the app
-    match /checklist-photos/{allPaths=**} {
-      allow create: if request.resource.size < 10 * 1024 * 1024
+    // Checklist photos: Secure by requiring auth and enforcing path-based ownership
+    match /checklist-photos/{checklistId}/{userId}/{itemId}/{photoId} {
+      allow create: if request.auth != null 
+                   && request.auth.uid == userId
+                   && request.resource.size < 10 * 1024 * 1024
                    && request.resource.contentType.matches('image/.*');
       
-      // Allow read for everyone
       allow read: if true;
 
-      // Allow update and delete for any authenticated user (logged in or anonymous)
-      allow update, delete: if request.auth != null;
+      // Only the original uploader (or the same authenticated identity) can delete/update
+      allow update, delete: if request.auth != null && request.auth.uid == userId;
     }
   }
 }

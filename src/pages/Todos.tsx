@@ -9,14 +9,11 @@ import {
   moveTodoToChecklist
 } from '@/src/services/db';
 import { Todo, Checklist } from '@/src/types';
-import { Button, buttonVariants } from '@/components/ui/button';
+import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { 
   Plus, 
-  Trash2, 
-  ArrowRightLeft, 
-  MoreVertical,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
@@ -25,11 +22,10 @@ import {
 import { toast } from 'sonner';
 import { motion, AnimatePresence } from 'motion/react';
 import Navbar from '@/src/components/Navbar';
-import { cn } from '@/lib/utils';
 import { generateMarkdown, parseMarkdown } from '@/src/lib/markdownUtils';
 import { collection, serverTimestamp, doc, writeBatch } from 'firebase/firestore';
 import { db } from '@/src/lib/firebase';
-import ReactMarkdown from 'react-markdown';
+import { TodoItem } from '@/src/components/Todo/TodoItem';
 import {
   Dialog,
   DialogContent,
@@ -38,12 +34,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import {
   Select,
   SelectContent,
@@ -109,6 +99,8 @@ export default function Todos() {
         batch.set(todoRef, {
           userId: user.uid,
           title: item.text,
+          description: item.description || null,
+          outcome: item.outcome || 'none',
           note: null,
           isDone: item.isDone,
           projectId: null,
@@ -229,6 +221,7 @@ export default function Todos() {
                     key={todo.id} 
                     todo={todo} 
                     onToggle={() => handleToggle(todo)}
+                    onUpdate={(updates) => updateTodo(todo.id, updates)}
                     onDelete={() => handleDelete(todo.id)}
                     onMove={() => handleMoveClick(todo)}
                   />
@@ -260,6 +253,7 @@ export default function Todos() {
                           key={todo.id} 
                           todo={todo} 
                           onToggle={() => handleToggle(todo)}
+                          onUpdate={(updates) => updateTodo(todo.id, updates)}
                           onDelete={() => handleDelete(todo.id)}
                           onMove={() => handleMoveClick(todo)}
                         />
@@ -362,77 +356,5 @@ export default function Todos() {
         </Dialog>
       </main>
     </div>
-  );
-}
-
-interface TodoItemProps {
-  todo: Todo;
-  onToggle: () => void | Promise<void>;
-  onDelete: () => void | Promise<void>;
-  onMove: () => void;
-  key?: React.Key;
-}
-
-function TodoItem({ todo, onToggle, onDelete, onMove }: TodoItemProps) {
-  return (
-    <motion.div
-      layout
-      initial={{ opacity: 0, x: -20 }}
-      animate={{ opacity: 1, x: 0 }}
-      exit={{ opacity: 0, x: 20 }}
-      className={`group flex items-center gap-4 p-4 rounded-2xl border-2 border-slate-900 shadow-bento bg-white transition-all ${
-        todo.isDone ? 'opacity-60 bg-slate-50 grayscale shadow-none translate-x-1 translate-y-1' : 'hover:-translate-y-1'
-      }`}
-    >
-      <button 
-        onClick={onToggle}
-        className={`w-6 h-6 shrink-0 rounded-lg border-2 border-slate-900 transition-colors flex items-center justify-center ${
-          todo.isDone ? 'bg-emerald-500' : 'bg-white'
-        }`}
-      >
-        {todo.isDone && <CheckCircle2 className="w-4 h-4 text-white" />}
-      </button>
-
-      <div className="flex-1 min-w-0">
-        <div className={`font-black uppercase tracking-tight ${todo.isDone ? 'line-through text-slate-400' : ''}`}>
-          <ReactMarkdown 
-            components={{
-              p: ({children}) => <p className="m-0 leading-tight">{children}</p>,
-              a: ({...props}) => <a {...props} className="text-indigo-600 underline" target="_blank" rel="noopener noreferrer" />,
-            }}
-          >
-            {todo.title}
-          </ReactMarkdown>
-        </div>
-        {todo.note && (
-          <div className={`text-xs font-bold text-slate-400 mt-0.5 ${todo.isDone ? 'line-through' : ''}`}>
-             <ReactMarkdown 
-              components={{
-                p: ({children}) => <p className="m-0">{children}</p>,
-                a: ({...props}) => <a {...props} className="text-indigo-600 underline" target="_blank" rel="noopener noreferrer" />,
-              }}
-            >
-              {todo.note}
-            </ReactMarkdown>
-          </div>
-        )}
-      </div>
-
-      <DropdownMenu>
-        <DropdownMenuTrigger className={cn(buttonVariants({ variant: "ghost", size: "icon" }), "h-8 w-8 rounded-lg")}>
-          <MoreVertical className="w-4 h-4" />
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="bento-card w-48">
-          <DropdownMenuItem onClick={onMove} className="gap-2 font-bold uppercase text-[10px] tracking-widest cursor-pointer">
-            <ArrowRightLeft className="w-3.5 h-3.5 text-indigo-600" />
-            Move to Checklist
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={onDelete} className="gap-2 font-bold uppercase text-[10px] tracking-widest text-destructive cursor-pointer">
-            <Trash2 className="w-3.5 h-3.5" />
-            Delete Task
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </motion.div>
   );
 }

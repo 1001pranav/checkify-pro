@@ -30,6 +30,7 @@ import {
   Trash2,
   Share2
 } from 'lucide-react';
+import { TodoItem } from '@/src/components/Todo/TodoItem';
 import { motion, AnimatePresence } from 'motion/react';
 import Navbar from '@/src/components/Navbar';
 import {
@@ -42,7 +43,6 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Checkbox } from '@/components/ui/checkbox';
 import { ShareProjectDialog } from '@/src/components/Project/ShareProjectDialog';
 
 export default function ProjectDetail() {
@@ -194,22 +194,34 @@ export default function ProjectDetail() {
     }
   };
 
-  const handleToggleTodo = async (todo: Todo) => {
-    await updateTodo(todo.id, { isDone: !todo.isDone });
+  const handleToggleTodo = async (todoId: string, updates: Partial<Todo>) => {
+    try {
+      await updateTodo(todoId, updates);
+    } catch (err) {
+      toast.error('Failed to update task');
+    }
   };
 
   const handleDeleteChecklist = async (e: React.MouseEvent, cid: string) => {
     e.stopPropagation();
     if (confirm('Delete this checklist?')) {
-      await deleteChecklist(cid);
-      toast.success('Checklist deleted');
+      try {
+        await deleteChecklist(cid);
+        toast.success('Checklist deleted');
+      } catch (err) {
+        toast.error('Failed to delete checklist');
+      }
     }
   };
 
   const handleDeleteTodo = async (tid: string) => {
     if (confirm('Delete this todo?')) {
-      await deleteTodo(tid);
-      toast.success('Todo deleted');
+      try {
+        await deleteTodo(tid);
+        toast.success('Todo deleted');
+      } catch (err) {
+        toast.error('Failed to delete todo');
+      }
     }
   };
 
@@ -401,27 +413,13 @@ export default function ProjectDetail() {
               ) : (
                 <AnimatePresence>
                   {todos.map(todo => (
-                    <motion.div 
+                    <TodoItem 
                       key={todo.id}
-                      initial={{ opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      className="flex items-center gap-4 bg-white p-4 rounded-2xl border-2 border-slate-900 shadow-bento group"
-                    >
-                      <Checkbox 
-                        checked={todo.isDone} 
-                        onCheckedChange={() => handleToggleTodo(todo)}
-                        className="w-5 h-5 border-2 border-slate-900 data-[state=checked]:bg-emerald-600 data-[state=checked]:border-slate-900"
-                      />
-                      <div className="flex-1 min-w-0">
-                        <h4 className={`font-black uppercase text-sm tracking-tight truncate ${todo.isDone ? 'line-through text-slate-400' : 'text-slate-900'}`}>
-                          {todo.title}
-                        </h4>
-                        {todo.note && <p className="text-[10px] font-medium italic text-slate-500 line-clamp-1">{todo.note}</p>}
-                      </div>
-                      <Button variant="ghost" size="icon" className="text-destructive opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => handleDeleteTodo(todo.id)}>
-                        <Trash2 className="w-4 h-4" />
-                      </Button>
-                    </motion.div>
+                      todo={todo}
+                      onToggle={() => handleToggleTodo(todo.id, { isDone: !todo.isDone })}
+                      onUpdate={(updates) => handleToggleTodo(todo.id, updates)}
+                      onDelete={() => handleDeleteTodo(todo.id)}
+                    />
                   ))}
                 </AnimatePresence>
               )}

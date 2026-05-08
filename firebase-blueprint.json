@@ -22,6 +22,8 @@
       "properties": {
         "checklistId": { "type": "string" },
         "text": { "type": "string" },
+        "description": { "type": "string" },
+        "outcome": { "type": "string", "enum": ["success", "failure", "none"] },
         "isDone": { "type": "boolean" },
         "photoUrl": { "type": "string" },
         "photoUrls": { "type": "array", "items": { "type": "string" }, "description": "Multiple verification photos" },
@@ -57,6 +59,8 @@
       "properties": {
         "userId": { "type": "string" },
         "title": { "type": "string" },
+        "description": { "type": "string" },
+        "outcome": { "type": "string", "enum": ["success", "failure", "none"] },
         "note": { "type": "string" },
         "isDone": { "type": "boolean" },
         "createdAt": { "type": "string", "format": "date-time" },

@@ -32,6 +32,8 @@ export interface ChecklistItem {
   id: string;
   checklistId: string;
   text: string;
+  description?: string;
+  outcome?: 'success' | 'failure' | 'none';
   isDone: boolean;
   photoUrl: string | null;
   photoUrls?: string[];
@@ -60,6 +62,8 @@ export interface Todo {
   userId: string;
   projectId?: string | null;
   title: string;
+  description?: string;
+  outcome?: 'success' | 'failure' | 'none';
   note?: string;
   isDone: boolean;
   createdAt: Timestamp;

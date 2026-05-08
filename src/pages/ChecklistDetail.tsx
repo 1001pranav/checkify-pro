@@ -18,6 +18,7 @@ import {
   deleteShare
 } from '@/src/services/db';
 import { exportChecklistToPDF } from '@/src/services/pdfExport';
+import { validateImage } from '@/src/lib/imageProcessing';
 import { Checklist, ChecklistItem, ChecklistShare } from '@/src/types';
 import { db } from '@/src/lib/firebase';
 import { doc, Timestamp, writeBatch, onSnapshot } from 'firebase/firestore';
@@ -66,6 +67,8 @@ export default function ChecklistDetail() {
     comment: ''
   });
   const [isCreatingShare, setIsCreatingShare] = useState(false);
+  const [autoFocusItemId, setAutoFocusItemId] = useState<string | null>(null);
+  const hasAutoCompleted = React.useRef(false);
 
   useEffect(() => {
     if (!id) return;
@@ -115,16 +118,23 @@ export default function ChecklistDetail() {
 
   // Auto-complete logic
   useEffect(() => {
-    if (!checklist || items.length === 0 || checklist.status !== 'active') return;
+    if (!checklist || items.length === 0 || checklist.status !== 'active' || hasAutoCompleted.current) return;
     const allDone = items.every(item => item.isDone);
     if (allDone) {
+      hasAutoCompleted.current = true;
       updateChecklist(checklist.id, { status: 'completed', completedAt: Timestamp.now() });
       toast.success('Checklist completed!', {
         action: {
           label: 'Undo',
-          onClick: () => updateChecklist(checklist.id, { status: 'active', completedAt: null })
+          onClick: () => {
+            hasAutoCompleted.current = false;
+            updateChecklist(checklist.id, { status: 'active', completedAt: null });
+          }
         }
       });
+    } else if (checklist.status === 'active') {
+      // If items become un-done, allow auto-complete to trigger again later
+      hasAutoCompleted.current = false;
     }
   }, [items, checklist]);
 
@@ -160,6 +170,8 @@ export default function ChecklistDetail() {
         batch.set(itemRef, {
           checklistId: id,
           text: item.text,
+          description: item.description || null,
+          outcome: item.outcome || 'none',
           isDone: item.isDone,
           photoUrl: null,
           photoUrls: [],
@@ -196,7 +208,10 @@ export default function ChecklistDetail() {
     if (!newItemText.trim() || !id) return;
     const position = items.length > 0 ? Math.max(...items.map(i => i.position)) + 1 : 0;
     const tokenToUse = projectToken || checklist?.shareToken;
-    await addItem(id, newItemText.trim(), position, null, tokenToUse || undefined);
+    const newItem = await addItem(id, newItemText.trim(), position, null, tokenToUse || undefined);
+    if (newItem) {
+      setAutoFocusItemId(newItem.id);
+    }
     setNewItemText('');
   };
 
@@ -207,7 +222,10 @@ export default function ChecklistDetail() {
     const tokenToUse = projectToken || checklist?.shareToken;
     
     // Create a blank sub-item and focus it immediately for editing
-    await addItem(id, 'New sub-task', position, parentId, tokenToUse || undefined);
+    const newItem = await addItem(id, 'New sub-task', position, parentId, tokenToUse || undefined);
+    if (newItem) {
+      setAutoFocusItemId(newItem.id);
+    }
     toast.success('Sub-task added');
   };
 
@@ -282,6 +300,14 @@ export default function ChecklistDetail() {
     if (!id || !e.target.files) return;
     const files = Array.from(e.target.files);
     if (files.length === 0) return;
+
+    try {
+      // Client-side validation
+      files.forEach(file => validateImage(file));
+    } catch (err) {
+      toast.error((err as Error).message);
+      return;
+    }
 
     const loadingToast = toast.loading(files.length > 1 ? `Uploading ${files.length} photos...` : 'Uploading photo...');
     try {
@@ -541,12 +567,23 @@ export default function ChecklistDetail() {
                             onToggle={(id) => toggleItem(items.find(i => i.id === id)!)}
                             onIndent={(id, direction) => handleIndentChange(items.find(i => i.id === id)!, direction)}
                             onAddSubItem={handleAddSubItem}
-                            onDelete={(id) => deleteItem(checklist.id, id)}
-                            onUpdateText={(id, text) => updateItem(checklist.id, id, { text }, projectToken || checklist?.shareToken || undefined)}
+                            onDelete={async (id) => {
+                              if (confirm('Delete this item?')) {
+                                try {
+                                  await deleteItem(checklist.id, id);
+                                  toast.success('Item removed');
+                                } catch (err) {
+                                  toast.error('Failed to delete item');
+                                }
+                              }
+                            }}
+                            onUpdate={(id, updates) => updateItem(checklist.id, id, updates, projectToken || checklist?.shareToken || undefined)}
                             onPhotoUpload={handlePhotoUpload}
                             onPhotoDelete={handlePhotoDelete}
                             onPhotosRearrange={handlePhotosRearrange}
                             onToggleCollapse={handleToggleCollapse}
+                            autoFocus={autoFocusItemId === item.id}
+                            onFocused={() => setAutoFocusItemId(null)}
                             userId={user?.uid}
                             userName={user?.displayName || user?.email?.split('@')[0] || 'User'}
                             checklistId={checklist.id}

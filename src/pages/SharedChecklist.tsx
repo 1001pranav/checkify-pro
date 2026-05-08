@@ -55,19 +55,22 @@ export default function SharedChecklist() {
   useEffect(() => {
     if (!token) return;
     
-    let unsubscribe: (() => void) | undefined;
+    let isMounted = true;
+    let unsubChecklist: (() => void) | undefined;
+    let unsubscribeItems: (() => void) | undefined;
     
     const init = async () => {
       try {
         const result = await getSharedChecklist(token);
-        if (!result) return;
+        if (!result || !isMounted) return;
+
         const { checklist: initialChecklist, permission, shareMetadata } = result;
         setPermission(permission);
         setShareMetadata(shareMetadata);
 
         // Subscribe to checklist metadata for real-time updates
-        const unsubChecklist = onSnapshot(doc(db, 'checklists', initialChecklist.id), (snap) => {
-          if (snap.exists()) {
+        unsubChecklist = onSnapshot(doc(db, 'checklists', initialChecklist.id), (snap) => {
+          if (snap.exists() && isMounted) {
             setChecklist({ id: snap.id, ...snap.data() } as Checklist);
           }
         });
@@ -77,24 +80,28 @@ export default function SharedChecklist() {
           await signInAnonymously(auth);
         }
         
-        unsubscribe = subscribeToItems(initialChecklist.id, (data: ChecklistItem[]) => {
-          setItems(data);
-          setLoading(false);
+        if (!isMounted) return;
+        
+        unsubscribeItems = subscribeToItems(initialChecklist.id, (data: ChecklistItem[]) => {
+          if (isMounted) {
+            setItems(data);
+            setLoading(false);
+          }
         });
-
-        return () => {
-          unsubChecklist();
-          if (unsubscribe) unsubscribe();
-        };
       } catch (err) {
-        toast.error((err as Error).message);
-        setLoading(false);
+        if (isMounted) {
+          toast.error((err as Error).message);
+          setLoading(false);
+        }
       }
     };
     
-    const cleanupPromise = init();
+    init();
+
     return () => {
-      cleanupPromise.then(cleanup => cleanup && cleanup());
+      isMounted = false;
+      if (unsubChecklist) unsubChecklist();
+      if (unsubscribeItems) unsubscribeItems();
     };
   }, [token]);
 
@@ -223,6 +230,8 @@ export default function SharedChecklist() {
         batch.set(itemRef, {
           checklistId: checklist.id,
           text: item.text,
+          description: item.description || '',
+          outcome: item.outcome || 'none',
           isDone: item.isDone,
           photoUrl: null,
           photoUrls: [],
@@ -364,7 +373,7 @@ export default function SharedChecklist() {
                     indent={level}
                     readOnly={permission !== 'edit'}
                     onToggle={(id) => toggleItem(items.find(i => i.id === id)!)}
-                    onUpdateText={(id, text) => checklist && updateItem(checklist.id, id, { text }, token || undefined)} 
+                    onUpdate={(id, updates) => checklist && updateItem(checklist.id, id, updates, token || undefined)} 
                     onDelete={() => {}}
                     onIndent={() => {}}
                     onAddSubItem={() => {}}
