@@ -7,9 +7,8 @@ import Dashboard from '@/src/pages/Dashboard';
 import Todos from '@/src/pages/Todos';
 import Projects from '@/src/pages/Projects';
 import ProjectDetail from '@/src/pages/ProjectDetail';
-import SharedProject from '@/src/pages/SharedProject';
 import ChecklistDetail from '@/src/pages/ChecklistDetail';
-import SharedChecklist from '@/src/pages/SharedChecklist';
+import SharedPage from '@/src/pages/SharedPage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -45,13 +44,12 @@ export default function App() {
                 <ProjectDetail />
               </ProtectedRoute>
             } />
-            <Route path="/project-share/:token" element={<SharedProject />} />
             <Route path="/checklist/:id" element={
               <ProtectedRoute>
                 <ChecklistDetail />
               </ProtectedRoute>
             } />
-            <Route path="/share/:token" element={<SharedChecklist />} />
+            <Route path="/s/:token" element={<SharedPage />} />
             <Route path="*" element={<Navigate to="/" />} />
           </Routes>
         </div>

@@ -5,7 +5,12 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { 
   Trash2, 
   ArrowRightLeft, 
-  MoreVertical
+  MoreVertical,
+  Bold,
+  Italic,
+  List,
+  ListOrdered,
+  Plus
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { cn } from '@/lib/utils';
@@ -26,6 +31,8 @@ interface TodoItemProps {
   readOnly?: boolean;
 }
 
+import { LiveMarkdownEditor } from '../ui/LiveMarkdownEditor';
+
 export const TodoItem: React.FC<TodoItemProps> = ({ 
   todo, 
   onToggle, 
@@ -36,6 +43,31 @@ export const TodoItem: React.FC<TodoItemProps> = ({
 }) => {
   const [isEditingDesc, setIsEditingDesc] = useState(false);
   const [editDesc, setEditDesc] = useState(todo.description || '');
+  const [isAddingOutcome, setIsAddingOutcome] = useState(false);
+  const [newOutcome, setNewOutcome] = useState('');
+
+  const descRef = React.useRef<HTMLTextAreaElement>(null);
+
+  const insertMarkdown = (prefix: string, suffix: string = '') => {
+    if (!descRef.current) return;
+    const start = descRef.current.selectionStart;
+    const end = descRef.current.selectionEnd;
+    const text = descRef.current.value;
+    const selectedText = text.substring(start, end);
+    const beforeText = text.substring(0, start);
+    const afterText = text.substring(end);
+    
+    const newText = `${beforeText}${prefix}${selectedText}${suffix}${afterText}`;
+    setEditDesc(newText);
+    
+    setTimeout(() => {
+      if (descRef.current) {
+        descRef.current.focus();
+        const newCursorPos = start + prefix.length + selectedText.length + suffix.length;
+        descRef.current.setSelectionRange(newCursorPos, newCursorPos);
+      }
+    }, 0);
+  };
 
   const handleDescBlur = async () => {
     setIsEditingDesc(false);
@@ -48,6 +80,12 @@ export const TodoItem: React.FC<TodoItemProps> = ({
     if (e.key === 'Escape') {
       setEditDesc(todo.description || '');
       setIsEditingDesc(false);
+    }
+
+    // Save on Ctrl+Enter
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault();
+      handleDescBlur();
     }
   };
 
@@ -106,15 +144,84 @@ export const TodoItem: React.FC<TodoItemProps> = ({
         {(todo.description || isEditingDesc || !readOnly) && (
           <div className="mt-2 text-left">
             {isEditingDesc && !readOnly ? (
-              <textarea
-                autoFocus
-                className="w-full bg-slate-50 border-2 border-slate-200 rounded-lg p-2 text-xs font-medium focus:ring-0 focus:border-indigo-600 outline-none min-h-[60px] resize-y"
-                placeholder="What happened? Success or failure details..."
-                value={editDesc}
-                onChange={(e) => setEditDesc(e.target.value)}
-                onBlur={handleDescBlur}
-                onKeyDown={handleDescKeyDown}
-              />
+              <div className="space-y-1">
+                <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg w-fit border border-slate-200">
+                  <Button 
+                    variant="ghost" 
+                    size="icon" 
+                    className="h-7 w-7 hover:bg-white hover:text-indigo-600 transition-colors" 
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => insertMarkdown('**', '**')} 
+                    title="Bold (Ctrl+B)"
+                  >
+                    <Bold className="w-3.5 h-3.5" />
+                  </Button>
+                  <Button 
+                    variant="ghost" 
+                    size="icon" 
+                    className="h-7 w-7 hover:bg-white hover:text-indigo-600 transition-colors" 
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => insertMarkdown('*', '*')} 
+                    title="Italic (Ctrl+I)"
+                  >
+                    <Italic className="w-3.5 h-3.5" />
+                  </Button>
+                  <div className="w-[1px] h-4 bg-slate-300 mx-1" />
+                  <Button 
+                    variant="ghost" 
+                    size="icon" 
+                    className="h-7 w-7 hover:bg-white hover:text-indigo-600 transition-colors" 
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => insertMarkdown('- ')} 
+                    title="Bullet List"
+                  >
+                    <List className="w-3.5 h-3.5" />
+                  </Button>
+                  <Button 
+                    variant="ghost" 
+                    size="icon" 
+                    className="h-7 w-7 hover:bg-white hover:text-indigo-600 transition-colors" 
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => insertMarkdown('1. ')} 
+                    title="Numbered List"
+                  >
+                    <ListOrdered className="w-3.5 h-3.5" />
+                  </Button>
+                </div>
+                <LiveMarkdownEditor
+                  ref={descRef}
+                  autoFocus
+                  value={editDesc}
+                  onChange={setEditDesc}
+                  onBlur={handleDescBlur}
+                  onKeyDown={handleDescKeyDown}
+                  placeholder="What happened? Success or failure details..."
+                />
+                <div className="flex justify-between items-center px-1">
+                  <span className="text-[10px] text-slate-400 font-bold uppercase">Markdown Supported</span>
+                  <div className="flex gap-2">
+                    <Button 
+                      variant="ghost" 
+                      size="sm" 
+                      className="h-7 px-3 text-[10px] font-black uppercase text-rose-500 hover:bg-rose-50" 
+                      onClick={() => {
+                        setEditDesc(todo.description || '');
+                        setIsEditingDesc(false);
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                    <Button 
+                      variant="default" 
+                      size="sm" 
+                      className="h-7 px-3 text-[10px] font-black uppercase bg-slate-900 text-white rounded-md hover:bg-indigo-600 transition-colors" 
+                      onClick={handleDescBlur}
+                    >
+                      Save Result
+                    </Button>
+                  </div>
+                </div>
+              </div>
             ) : (
               <div 
                 onClick={() => !readOnly && setIsEditingDesc(true)}
@@ -165,6 +272,20 @@ export const TodoItem: React.FC<TodoItemProps> = ({
               <Button 
                 variant="ghost" 
                 size="sm" 
+                onClick={() => !readOnly && onUpdate({ outcome: todo.outcome === 'warning' ? 'none' : 'warning' })}
+                disabled={readOnly}
+                className={cn(
+                  "h-6 px-2 text-[8px] font-black uppercase rounded-md border-2 transition-all",
+                  todo.outcome === 'warning' 
+                    ? "bg-amber-500 text-white border-amber-600 shadow-sm" 
+                    : "bg-white text-amber-600 border-amber-100 hover:border-amber-500"
+                )}
+              >
+                Partial
+              </Button>
+              <Button 
+                variant="ghost" 
+                size="sm" 
                 onClick={() => !readOnly && onUpdate({ outcome: todo.outcome === 'failure' ? 'none' : 'failure' })}
                 disabled={readOnly}
                 className={cn(
@@ -176,6 +297,99 @@ export const TodoItem: React.FC<TodoItemProps> = ({
               >
                 Failure
               </Button>
+              <Button 
+                variant="ghost" 
+                size="sm" 
+                onClick={() => !readOnly && onUpdate({ outcome: todo.outcome === 'na' ? 'none' : 'na' })}
+                disabled={readOnly}
+                className={cn(
+                  "h-6 px-2 text-[8px] font-black uppercase rounded-md border-2 transition-all",
+                  todo.outcome === 'na' 
+                    ? "bg-slate-400 text-white border-slate-500 shadow-sm" 
+                    : "bg-white text-slate-400 border-slate-100 hover:border-slate-400"
+                )}
+              >
+                N/A
+              </Button>
+              <Button 
+                variant="ghost" 
+                size="sm" 
+                onClick={() => !readOnly && onUpdate({ outcome: todo.outcome === 'skipped' ? 'none' : 'skipped' })}
+                disabled={readOnly}
+                className={cn(
+                  "h-6 px-2 text-[8px] font-black uppercase rounded-md border-2 transition-all",
+                  todo.outcome === 'skipped' 
+                    ? "bg-indigo-400 text-white border-indigo-500 shadow-sm" 
+                    : "bg-white text-indigo-400 border-indigo-100 hover:border-indigo-400"
+                )}
+              >
+                Skipped
+              </Button>
+
+              {todo.outcome && !['success', 'failure', 'warning', 'na', 'skipped', 'none'].includes(todo.outcome) && (
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  onClick={() => !readOnly && onUpdate({ outcome: 'none' })}
+                  disabled={readOnly}
+                  className="h-6 px-2 text-[8px] font-black uppercase rounded-md border-2 bg-slate-900 text-white border-slate-900 shadow-sm"
+                >
+                  {todo.outcome}
+                </Button>
+              )}
+
+              {!readOnly && (
+                <div className="flex items-center gap-1">
+                  {isAddingOutcome ? (
+                    <div className="flex items-center gap-1 animate-in slide-in-from-left-2">
+                      <input 
+                        autoFocus
+                        className="h-6 w-16 px-2 text-[8px] font-bold uppercase rounded-md border-2 border-slate-900 outline-none focus:ring-2 focus:ring-indigo-500"
+                        placeholder="..."
+                        value={newOutcome}
+                        onChange={(e) => setNewOutcome(e.target.value)}
+                        onBlur={() => {
+                          if (!newOutcome.trim()) setIsAddingOutcome(false);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && newOutcome.trim()) {
+                            onUpdate({ outcome: newOutcome.trim() });
+                            setNewOutcome('');
+                            setIsAddingOutcome(false);
+                          }
+                          if (e.key === 'Escape') {
+                            setIsAddingOutcome(false);
+                            setNewOutcome('');
+                          }
+                        }}
+                      />
+                      <Button 
+                        variant="ghost" 
+                        size="icon" 
+                        onClick={() => {
+                          if (newOutcome.trim()) {
+                            onUpdate({ outcome: newOutcome.trim() });
+                            setNewOutcome('');
+                          }
+                          setIsAddingOutcome(false);
+                        }}
+                        className="h-6 w-6 text-indigo-600"
+                      >
+                        <Plus className="w-3 h-3" />
+                      </Button>
+                    </div>
+                  ) : (
+                    <Button 
+                      variant="ghost" 
+                      size="icon" 
+                      onClick={() => setIsAddingOutcome(true)}
+                      className="h-6 w-6 text-slate-400 hover:text-slate-900 border-2 border-dashed border-slate-200 hover:border-slate-900 transition-all rounded-md"
+                    >
+                      <Plus className="w-3 h-3" />
+                    </Button>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         )}

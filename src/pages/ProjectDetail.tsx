@@ -10,12 +10,10 @@ import {
   updateTodo,
   deleteChecklist,
   deleteTodo,
-  createProjectShare,
-  subscribeToProjectShares,
-  deleteProjectShare,
-  deleteProject
+  deleteProject,
+  subscribeToShareConfig
 } from '@/src/services/db';
-import { Project, Checklist, Todo, ProjectShare } from '@/src/types';
+import { Project, Checklist, Todo, ShareConfig } from '@/src/types';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -43,7 +41,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { ShareProjectDialog } from '@/src/components/Project/ShareProjectDialog';
+import { ShareModal } from '@/src/components/ShareModal';
 
 export default function ProjectDetail() {
   const { id } = useParams<{ id: string }>();
@@ -53,7 +51,7 @@ export default function ProjectDetail() {
   const [project, setProject] = useState<Project | null>(null);
   const [checklists, setChecklists] = useState<Checklist[]>([]);
   const [todos, setTodos] = useState<Todo[]>([]);
-  const [shares, setShares] = useState<ProjectShare[]>([]);
+  const [shareConfig, setShareConfig] = useState<ShareConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('checklists');
   
@@ -64,16 +62,6 @@ export default function ProjectDetail() {
   const [newChecklistTitle, setNewChecklistTitle] = useState('');
   const [newTodoTitle, setNewTodoTitle] = useState('');
   const [itemLoading, setItemLoading] = useState(false);
-
-  // Sharing states
-  const [shareOptions, setShareOptions] = useState({
-    permission: 'view' as 'view' | 'edit',
-    isPublic: true,
-    sharedByName: '',
-    comment: ''
-  });
-  const [shareLink, setShareLink] = useState('');
-  const [shareLoading, setShareLoading] = useState(false);
 
   useEffect(() => {
     if (!user || !id) return;
@@ -87,9 +75,6 @@ export default function ProjectDetail() {
           return;
         }
         setProject(data);
-        if (data.shareToken) {
-          // pre-fill shares if needed
-        }
       } catch (err) {
         console.error('Failed to fetch project:', err);
       }
@@ -106,44 +91,14 @@ export default function ProjectDetail() {
       setLoading(false);
     }, id);
 
-    const unsubShares = subscribeToProjectShares(id, user.uid, (data) => {
-      setShares(data);
-    });
+    const unsubShare = subscribeToShareConfig(id, setShareConfig);
     
     return () => {
       unsubChecklists();
       unsubTodos();
-      unsubShares();
+      unsubShare();
     };
   }, [user, id, navigate]);
-
-  const handleGenerateShare = async () => {
-    if (!user || !id) return;
-    setShareLoading(true);
-    try {
-      const token = await createProjectShare(id, user.uid, shareOptions.permission, shareOptions);
-      if (token) {
-        setShareLink(`${window.location.origin}/project-share/${token}`);
-        toast.success('Project collaboration expanded');
-      }
-    } catch (err) {
-      console.error('Sharing failed:', err);
-      toast.error('Failed to initialize sharing');
-    } finally {
-      setShareLoading(false);
-    }
-  };
-
-  const handleDeleteShare = async (token: string) => {
-    if (!id) return;
-    try {
-      await deleteProjectShare(token, id);
-      toast.success('Access revoked');
-    } catch (err) {
-      console.error('Revoke failed:', err);
-      toast.error('Failed to revoke access');
-    }
-  };
 
   const handleDeleteProject = async () => {
     if (!id) return;
@@ -197,7 +152,7 @@ export default function ProjectDetail() {
   const handleToggleTodo = async (todoId: string, updates: Partial<Todo>) => {
     try {
       await updateTodo(todoId, updates);
-    } catch (err) {
+    } catch {
       toast.error('Failed to update task');
     }
   };
@@ -208,7 +163,7 @@ export default function ProjectDetail() {
       try {
         await deleteChecklist(cid);
         toast.success('Checklist deleted');
-      } catch (err) {
+      } catch {
         toast.error('Failed to delete checklist');
       }
     }
@@ -219,7 +174,7 @@ export default function ProjectDetail() {
       try {
         await deleteTodo(tid);
         toast.success('Todo deleted');
-      } catch (err) {
+      } catch {
         toast.error('Failed to delete todo');
       }
     }
@@ -306,19 +261,20 @@ export default function ProjectDetail() {
            </div>
         </div>
 
-        {/* Share Dialog */}
-        <ShareProjectDialog 
-          isOpen={isShareDialogOpen}
-          onOpenChange={setIsShareDialogOpen}
-          options={shareOptions}
-          setOptions={setShareOptions}
-          shareLink={shareLink}
-          setShareLink={setShareLink}
-          onGenerate={handleGenerateShare}
-          loading={shareLoading}
-          shares={shares}
-          onDeleteShare={handleDeleteShare}
-        />
+        {/* Share Modal */}
+        {id && (
+          <ShareModal
+            isOpen={isShareDialogOpen}
+            onOpenChange={setIsShareDialogOpen}
+            entityType="project"
+            entityId={id}
+            initialConfig={shareConfig}
+            projectContext={{
+              checklistsCount: checklists.length,
+              todosCount: todos.length
+            }}
+          />
+        )}
 
         {/* Assets Tabs */}
         <Tabs defaultValue="checklists" className="w-full" onValueChange={setActiveTab}>

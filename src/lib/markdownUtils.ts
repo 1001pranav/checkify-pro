@@ -46,7 +46,7 @@ export interface ParsedItem {
   description?: string;
   isDone: boolean;
   level: number;
-  outcome?: 'success' | 'failure' | 'none';
+  outcome?: string;
 }
 
 /**

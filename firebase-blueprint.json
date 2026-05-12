@@ -23,7 +23,7 @@
         "checklistId": { "type": "string" },
         "text": { "type": "string" },
         "description": { "type": "string" },
-        "outcome": { "type": "string", "enum": ["success", "failure", "none"] },
+        "outcome": { "type": "string", "description": "Status of the ritual step" },
         "isDone": { "type": "boolean" },
         "photoUrl": { "type": "string" },
         "photoUrls": { "type": "array", "items": { "type": "string" }, "description": "Multiple verification photos" },
@@ -35,92 +35,42 @@
       },
       "required": ["checklistId", "text", "isDone", "position", "createdAt"]
     },
-    "ChecklistShare": {
-      "title": "Checklist Share",
-      "description": "Public share configuration for a checklist.",
+    "ShareConfig": {
+      "title": "Share Configuration",
+      "description": "Configuration for sharing an entity.",
       "type": "object",
       "properties": {
-        "checklistId": { "type": "string" },
-        "userId": { "type": "string" },
+        "entityType": { "type": "string", "enum": ["checklist", "todo", "project"] },
+        "entityId": { "type": "string" },
         "token": { "type": "string" },
+        "visibility": { "type": "string", "enum": ["public", "private"] },
         "permission": { "type": "string", "enum": ["view", "edit"] },
-        "revoked": { "type": "boolean" },
-        "isPublic": { "type": "boolean" },
-        "sharedByName": { "type": "string" },
-        "comment": { "type": "string" },
-        "createdAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["checklistId", "userId", "token", "permission", "isPublic", "createdAt"]
-    },
-    "Todo": {
-      "title": "Todo",
-      "description": "A standalone todo item.",
-      "type": "object",
-      "properties": {
-        "userId": { "type": "string" },
-        "title": { "type": "string" },
-        "description": { "type": "string" },
-        "outcome": { "type": "string", "enum": ["success", "failure", "none"] },
-        "note": { "type": "string" },
-        "isDone": { "type": "boolean" },
+        "invitedEmails": { "type": "array", "items": { "type": "string" } },
+        "createdBy": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" }
+        "expiresAt": { "type": "string", "format": "date-time" },
+        "isActive": { "type": "boolean" }
       },
-      "required": ["userId", "title", "isDone", "createdAt", "updatedAt"]
+      "required": ["entityType", "entityId", "token", "visibility", "permission", "createdBy", "createdAt", "isActive"]
     },
-    "ItemComment": {
-      "title": "Item Comment",
-      "description": "A comment on a checklist item.",
+    "GuestSession": {
+      "title": "Guest Session",
+      "description": "Session for unregistered users to access private shares.",
       "type": "object",
       "properties": {
-        "itemId": { "type": "string" },
-        "userId": { "type": "string" },
-        "userName": { "type": "string" },
-        "text": { "type": "string" },
-        "createdAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["itemId", "userId", "userName", "text", "createdAt"]
-    },
-    "Project": {
-      "title": "Project",
-      "description": "A container for grouped checklists and todos.",
-      "type": "object",
-      "properties": {
-        "userId": { "type": "string" },
-        "title": { "type": "string" },
-        "description": { "type": "string" },
+        "email": { "type": "string" },
         "shareToken": { "type": "string" },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" }
+        "magicToken": { "type": "string" },
+        "sessionToken": { "type": "string" },
+        "expiresAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["userId", "title", "createdAt", "updatedAt"]
-    },
-    "ProjectShare": {
-      "title": "Project Share",
-      "description": "Public share configuration for a project.",
-      "type": "object",
-      "properties": {
-        "projectId": { "type": "string" },
-        "userId": { "type": "string" },
-        "token": { "type": "string" },
-        "permission": { "type": "string", "enum": ["view", "edit"] },
-        "revoked": { "type": "boolean" },
-        "isPublic": { "type": "boolean" },
-        "sharedByName": { "type": "string" },
-        "comment": { "type": "string" },
-        "createdAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["projectId", "userId", "token", "permission", "isPublic", "createdAt"]
+      "required": ["email", "shareToken", "magicToken", "sessionToken", "expiresAt"]
     }
   },
   "firestore": {
     "/projects/{projectId}": {
       "schema": "Project",
       "description": "User projects"
-    },
-    "/projectShares/{shareToken}": {
-      "schema": "ProjectShare",
-      "description": "Project share tokens"
     },
     "/checklists/{checklistId}": {
       "schema": "Checklist",
@@ -134,9 +84,13 @@
       "schema": "ItemComment",
       "description": "Subcollection of comments for a checklist item"
     },
-    "/shares/{shareToken}": {
-      "schema": "ChecklistShare",
-      "description": "Public share tokens"
+    "/shareConfigs/{token}": {
+      "schema": "ShareConfig",
+      "description": "Unified sharing configurations"
+    },
+    "/guestSessions/{sessionId}": {
+      "schema": "GuestSession",
+      "description": "Guest access sessions"
     },
     "/todos/{todoId}": {
       "schema": "Todo",

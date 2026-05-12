@@ -11,15 +11,12 @@ import {
   deleteItemPhoto,
   updateItemPhotosOrder,
   cascadeComplete,
-  createShare,
   toggleItemCollapse,
-  subscribeToShares,
-  updateSharePermission,
-  deleteShare
+  subscribeToShareConfig
 } from '@/src/services/db';
 import { exportChecklistToPDF } from '@/src/services/pdfExport';
 import { validateImage } from '@/src/lib/imageProcessing';
-import { Checklist, ChecklistItem, ChecklistShare } from '@/src/types';
+import { Checklist, ChecklistItem, ShareConfig } from '@/src/types';
 import { db } from '@/src/lib/firebase';
 import { doc, Timestamp, writeBatch, onSnapshot } from 'firebase/firestore';
 import { Button } from '@/components/ui/button';
@@ -41,7 +38,7 @@ import { toast } from 'sonner';
 import { motion } from 'motion/react';
 import Navbar from '@/src/components/Navbar';
 import { ChecklistItemRow } from '@/src/components/Checklist/ChecklistItemRow';
-import { ShareProtocolDialog } from '@/src/components/Checklist/ShareProtocolDialog';
+import { ShareModal } from '@/src/components/ShareModal';
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
 import { generateMarkdown, parseMarkdown } from '@/src/lib/markdownUtils';
 import { collection, serverTimestamp } from 'firebase/firestore';
@@ -55,18 +52,10 @@ export default function ChecklistDetail() {
   const [items, setItems] = useState<ChecklistItem[]>([]);
   const [newItemText, setNewItemText] = useState('');
   const [isShareDialogOpen, setIsShareDialogOpen] = useState(false);
-  const [shareLink, setShareLink] = useState('');
   const [loading, setLoading] = useState(true);
-  const [shares, setShares] = useState<ChecklistShare[]>([]);
+  const [shareConfig, setShareConfig] = useState<ShareConfig | null>(null);
   const [projectToken, setProjectToken] = useState<string | null>(null);
   
-  const [sharingOptions, setSharingOptions] = useState({
-    permission: 'view' as 'view' | 'edit',
-    isPublic: true,
-    sharedByName: '',
-    comment: ''
-  });
-  const [isCreatingShare, setIsCreatingShare] = useState(false);
   const [autoFocusItemId, setAutoFocusItemId] = useState<string | null>(null);
   const hasAutoCompleted = React.useRef(false);
 
@@ -96,25 +85,18 @@ export default function ChecklistDetail() {
   useEffect(() => {
     if (!id) return;
 
-    // Wait until we have the project token if needed (or just use what's in state)
     const unsubscribeItems = subscribeToItems(id, (data: ChecklistItem[]) => {
       setItems(data);
       setLoading(false);
     });
 
-    // Subscribe to shares (only if user is owner usually, but rules handle it)
-    let unsubscribeShares = () => {};
-    if (user && checklist?.userId === user.uid) {
-      unsubscribeShares = subscribeToShares(id, (data: ChecklistShare[]) => {
-        setShares(data);
-      });
-    }
+    const unsubscribeShare = subscribeToShareConfig(id, setShareConfig);
 
     return () => {
       unsubscribeItems();
-      unsubscribeShares();
+      unsubscribeShare();
     };
-  }, [id, user, checklist?.id, checklist?.userId, checklist?.shareToken, projectToken]);
+  }, [id]);
 
   // Auto-complete logic
   useEffect(() => {
@@ -178,7 +160,6 @@ export default function ChecklistDetail() {
           isCollapsed: false,
           position: currentMaxPos++,
           parentId: parentId || null,
-          shareToken: projectToken || checklist?.shareToken || null,
           createdAt: serverTimestamp()
         });
         
@@ -207,8 +188,7 @@ export default function ChecklistDetail() {
     e.preventDefault();
     if (!newItemText.trim() || !id) return;
     const position = items.length > 0 ? Math.max(...items.map(i => i.position)) + 1 : 0;
-    const tokenToUse = projectToken || checklist?.shareToken;
-    const newItem = await addItem(id, newItemText.trim(), position, null, tokenToUse || undefined);
+    const newItem = await addItem(id, newItemText.trim(), position, null, projectToken || undefined);
     if (newItem) {
       setAutoFocusItemId(newItem.id);
     }
@@ -219,10 +199,9 @@ export default function ChecklistDetail() {
     if (!id) return;
     const children = items.filter(i => i.parentId === parentId);
     const position = children.length > 0 ? Math.max(...children.map(c => c.position)) + 1 : 0;
-    const tokenToUse = projectToken || checklist?.shareToken;
     
     // Create a blank sub-item and focus it immediately for editing
-    const newItem = await addItem(id, 'New sub-task', position, parentId, tokenToUse || undefined);
+    const newItem = await addItem(id, 'New sub-task', position, parentId, projectToken || undefined);
     if (newItem) {
       setAutoFocusItemId(newItem.id);
     }
@@ -263,8 +242,7 @@ export default function ChecklistDetail() {
   const toggleItem = async (item: ChecklistItem) => {
     if (!id) return;
     const newStatus = !item.isDone;
-    const tokenToUse = projectToken || checklist?.shareToken;
-    await updateItem(id, item.id, { isDone: newStatus }, tokenToUse || undefined);
+    await updateItem(id, item.id, { isDone: newStatus }, projectToken || undefined);
     if (newStatus) {
       // Cascade complete
       await cascadeComplete(id, item.id, items);
@@ -285,7 +263,7 @@ export default function ChecklistDetail() {
     const index = siblings.findIndex(i => i.id === item.id);
     if (index > 0) {
       const previousSibling = siblings[index - 1];
-      await updateItem(id, item.id, { parentId: previousSibling.id }, projectToken || checklist?.shareToken || undefined);
+      await updateItem(id, item.id, { parentId: previousSibling.id }, projectToken || undefined);
     }
   };
 
@@ -293,7 +271,7 @@ export default function ChecklistDetail() {
     if (!id) return;
     if (!item.parentId) return;
     const parent = items.find(i => i.id === item.parentId);
-    await updateItem(id, item.id, { parentId: parent?.parentId || null }, projectToken || checklist?.shareToken || undefined);
+    await updateItem(id, item.id, { parentId: parent?.parentId || null }, projectToken || undefined);
   };
 
   const handlePhotoUpload = async (itemId: string, e: React.ChangeEvent<HTMLInputElement>) => {
@@ -311,7 +289,7 @@ export default function ChecklistDetail() {
 
     const loadingToast = toast.loading(files.length > 1 ? `Uploading ${files.length} photos...` : 'Uploading photo...');
     try {
-      await uploadItemPhotos(id, itemId, files, checklist?.shareToken || undefined);
+      await uploadItemPhotos(id, itemId, files, undefined);
       toast.dismiss(loadingToast);
       toast.success(files.length > 1 ? `${files.length} photos uploaded` : 'Photo uploaded');
     } catch {
@@ -324,7 +302,7 @@ export default function ChecklistDetail() {
     if (!id) return;
     const loadingToast = toast.loading('Deleting photo...');
     try {
-      await deleteItemPhoto(id, itemId, photoUrl, checklist?.shareToken || undefined);
+      await deleteItemPhoto(id, itemId, photoUrl, undefined);
       toast.dismiss(loadingToast);
       toast.success('Photo deleted');
     } catch {
@@ -336,7 +314,7 @@ export default function ChecklistDetail() {
   const handlePhotosRearrange = async (itemId: string, photoUrls: string[]) => {
     if (!id) return;
     try {
-      await updateItemPhotosOrder(id, itemId, photoUrls, checklist?.shareToken || undefined);
+      await updateItemPhotosOrder(id, itemId, photoUrls, undefined);
     } catch (error) {
       console.error('Reorder failed:', error);
       toast.error('Failed to save photo order');
@@ -346,7 +324,7 @@ export default function ChecklistDetail() {
   const handleToggleCollapse = async (itemId: string, collapsed: boolean) => {
     if (!id) return;
     try {
-      await toggleItemCollapse(id, itemId, collapsed, checklist?.shareToken || undefined);
+      await toggleItemCollapse(id, itemId, collapsed, undefined);
     } catch (error) {
       console.error('Failed to toggle collapse:', error);
       toast.error('Failed to save state');
@@ -357,10 +335,24 @@ export default function ChecklistDetail() {
     if (!checklist) return;
     const toastId = toast.loading("Initializing PDF Generation...");
     
+    // We want to export ALL items, not just the currently visible (uncollapsed) ones
+    const allNestedItems = nestItems(items);
+    const allFlattenedItems: { item: ChecklistItem, level: number }[] = [];
+    
+    const flattenAll = (nested: ChecklistItem[], level: number = 0) => {
+      nested.forEach(item => {
+        allFlattenedItems.push({ item, level });
+        if (item.children && item.children.length > 0) {
+          flattenAll(item.children, level + 1);
+        }
+      });
+    };
+    flattenAll(allNestedItems);
+    
     try {
       await exportChecklistToPDF({
         checklist,
-        items: flattenedItems,
+        items: allFlattenedItems,
         onProgress: (progress, status) => {
           toast.loading(status, { id: toastId });
         }
@@ -372,46 +364,8 @@ export default function ChecklistDetail() {
     }
   };
 
-  const handleShare = async () => {
-    if (!id || !user) return;
-    setIsCreatingShare(true);
-    try {
-      const token = await createShare(id, user.uid, sharingOptions.permission, {
-        isPublic: sharingOptions.isPublic,
-        sharedByName: sharingOptions.sharedByName,
-        comment: sharingOptions.comment
-      });
-      const url = `${window.location.origin}/share/${token}`;
-      setShareLink(url);
-    } catch {
-      toast.error('Sharing failed');
-    } finally {
-      setIsCreatingShare(false);
-    }
-  };
-
   const openShareDialog = () => {
-    setShareLink('');
     setIsShareDialogOpen(true);
-  };
-
-  const handleUpdateSharePermission = async (token: string, permission: 'view' | 'edit') => {
-    try {
-      await updateSharePermission(token, permission);
-      toast.success('Permission updated');
-    } catch {
-      toast.error('Update failed');
-    }
-  };
-
-  const handleDeleteShare = async (token: string) => {
-    if (!id) return;
-    try {
-      await deleteShare(token, id);
-      toast.success('Share link deleted');
-    } catch {
-      toast.error('Deletion failed');
-    }
   };
 
   const nestItems = (allItems: ChecklistItem[], parentId: string | null = null): ChecklistItem[] => {
@@ -501,7 +455,7 @@ export default function ChecklistDetail() {
           ))}
         </div>
         <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">
-          {checklist.shareToken ? 'Live Collaboration Link Active' : 'No public collaborators'}
+          {shareConfig ? 'Live Collaboration Link Active' : 'No public collaborators'}
         </p>
       </div>
 
@@ -572,12 +526,12 @@ export default function ChecklistDetail() {
                                 try {
                                   await deleteItem(checklist.id, id);
                                   toast.success('Item removed');
-                                } catch (err) {
+                                } catch {
                                   toast.error('Failed to delete item');
                                 }
                               }
                             }}
-                            onUpdate={(id, updates) => updateItem(checklist.id, id, updates, projectToken || checklist?.shareToken || undefined)}
+                            onUpdate={(id, updates) => updateItem(checklist.id, id, updates, projectToken || undefined)}
                             onPhotoUpload={handlePhotoUpload}
                             onPhotoDelete={handlePhotoDelete}
                             onPhotosRearrange={handlePhotosRearrange}
@@ -624,19 +578,15 @@ export default function ChecklistDetail() {
         </div>
       </form>
 
-      <ShareProtocolDialog 
-        isOpen={isShareDialogOpen}
-        onOpenChange={setIsShareDialogOpen}
-        options={sharingOptions}
-        setOptions={setSharingOptions}
-        shareLink={shareLink}
-        setShareLink={setShareLink}
-        onGenerate={handleShare}
-        loading={isCreatingShare}
-        shares={shares}
-        onUpdatePermission={handleUpdateSharePermission}
-        onDeleteShare={handleDeleteShare}
-      />
+      {id && (
+        <ShareModal
+          isOpen={isShareDialogOpen}
+          onOpenChange={setIsShareDialogOpen}
+          entityType="checklist"
+          entityId={id}
+          initialConfig={shareConfig}
+        />
+      )}
       </div>
     </div>
   );

@@ -8,349 +8,107 @@ service cloud.firestore {
 
     // --- Helpers ---
     function isSignedIn() { return request.auth != null; }
-    function isAnonymous() { return isSignedIn() && request.auth.token.firebase.sign_in_provider == 'anonymous'; }
-    function isVerified() { return isSignedIn() && (request.auth.token.email_verified == true || isAnonymous()); }
+    function isVerified() { return isSignedIn() && request.auth.token.email_verified == true; }
     function isOwner(userId) { return isSignedIn() && request.auth.uid == userId; }
     function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
     function incoming() { return request.resource.data; }
     function existing() { return resource.data; }
 
-    function isCollaborator(token, resourceId, type) {
-      let share = type == 'project' ? 
-        get(/databases/$(database)/documents/projectShares/$(token)).data :
-        get(/databases/$(database)/documents/shares/$(token)).data;
-      
-      return isSignedIn() && 
-             share != null && 
-             share.revoked == false && 
-             (type == 'project' ? share.projectId == resourceId : share.checklistId == resourceId);
+    // --- Share Resolution Helpers ---
+    function getShare(token) {
+      return get(/databases/$(database)/documents/shareConfigs/$(token)).data;
     }
     
+    function isValidShare(token, entityId, entityType) {
+      return exists(/databases/$(database)/documents/shareConfigs/$(token)) &&
+             getShare(token).isActive == true && 
+             getShare(token).entityId == entityId && 
+             getShare(token).entityType == entityType &&
+             (getShare(token).expiresAt == null || getShare(token).expiresAt > request.time);
+    }
+
+    function hasAccess(token, entityId, entityType, requiredPermission) {
+      return isValidShare(token, entityId, entityType) && 
+             (requiredPermission == 'view' || getShare(token).permission == 'edit') &&
+             (getShare(token).visibility == 'public' || (isSignedIn() && request.auth.token.email in getShare(token).invitedEmails));
+    }
+
     // --- Users ---
     match /users/{userId} {
       allow read, write: if isOwner(userId);
     }
 
+    // --- ShareConfigs ---
+    match /shareConfigs/{token} {
+      allow get: if isValidId(token);
+      allow create: if isVerified() && isOwner(incoming().createdBy);
+      allow update: if isVerified() && isOwner(existing().createdBy) && 
+                       incoming().createdBy == existing().createdBy &&
+                       incoming().token == existing().token;
+      allow delete: if isVerified() && isOwner(existing().createdBy);
+    }
+
     // --- Projects ---
     match /projects/{projectId} {
-      function isValidProject(data) {
-        return data.userId is string && 
-               data.title is string && data.title.size() > 0 && data.title.size() <= 500 &&
-               (data.get('description', null) == null || (data.get('description', null) is string && data.get('description', null).size() <= 2000)) &&
-               (data.get('shareToken', null) == null || (data.get('shareToken', null) is string && data.get('shareToken', null).size() <= 512)) &&
-               (data.createdAt == request.time || data.createdAt is timestamp) &&
-               (data.updatedAt == request.time || data.updatedAt is timestamp);
-      }
-
-      allow get: if isValidId(projectId) && ( (isSignedIn() && resource.data.userId == request.auth.uid) || (resource.data.get('shareToken', null) != null) );
-      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
-      
-      allow create: if isVerified() && 
-                       isValidId(projectId) &&
-                       request.auth.uid == incoming().userId &&
-                       isValidProject(incoming()) &&
-                       incoming().createdAt == request.time &&
-                       incoming().updatedAt == request.time;
-
-      allow update: if isVerified() && 
-                       isValidId(projectId) &&
-                       ( (existing().userId == request.auth.uid) || (existing().get('shareToken', null) != null && canEditProjectShared(existing().get('shareToken', ''), projectId)) ) &&
-                       isValidProject(incoming()) &&
-                       incoming().userId == existing().userId &&
-                       incoming().createdAt == existing().createdAt &&
-                       incoming().updatedAt == request.time;
-
-      allow delete: if isVerified() && isValidId(projectId) && existing().userId == request.auth.uid;
-    }
-
-    // Shared access helpers
-    function getShare(token) {
-      return get(/databases/$(database)/documents/shares/$(token)).data;
-    }
-    function isValidShare(token, checklistId) {
-      return exists(/databases/$(database)/documents/shares/$(token)) && 
-             getShare(token).checklistId == checklistId && 
-             getShare(token).revoked == false;
-    }
-    function canViewShared(token, checklistId) {
-      return isValidShare(token, checklistId);
-    }
-    function canEditShared(token, checklistId) {
-      return isValidShare(token, checklistId) && getShare(token).permission == 'edit';
-    }
-
-    // Project Sharing Helpers
-    function getProjectShare(token) {
-      return get(/databases/$(database)/documents/projectShares/$(token)).data;
-    }
-    function isValidProjectShare(token, projectId) {
-      return exists(/databases/$(database)/documents/projectShares/$(token)) && 
-             getProjectShare(token).projectId == projectId && 
-             getProjectShare(token).revoked == false;
-    }
-    function canViewProjectShared(token, projectId) {
-      return isValidProjectShare(token, projectId);
-    }
-    function canEditProjectShared(token, projectId) {
-      return isValidProjectShare(token, projectId) && getProjectShare(token).permission == 'edit';
-    }
-    function isProjectShared(projectId) {
-      return exists(/databases/$(database)/documents/projects/$(projectId)) && 
-             get(/databases/$(database)/documents/projects/$(projectId)).data.get('shareToken', null) != null;
-    }
-
-    function isProjectOwner(projectId) {
-      return isSignedIn() && exists(/databases/$(database)/documents/projects/$(projectId)) && 
-             get(/databases/$(database)/documents/projects/$(projectId)).data.userId == request.auth.uid;
+      allow get: if isOwner(resource.data.userId) || 
+                    (request.params.get('token', null) != null && hasAccess(request.params.token, projectId, 'project', 'view'));
+      allow list: if isOwner(resource.data.userId);
+      allow create: if isVerified() && isOwner(incoming().userId);
+      allow update: if isOwner(existing().userId) || 
+                       (request.params.get('token', null) != null && hasAccess(request.params.token, projectId, 'project', 'edit'));
+      allow delete: if isOwner(existing().userId);
     }
 
     // --- Checklists ---
     match /checklists/{checklistId} {
-      function isValidChecklist(data) {
-        return data.userId is string && 
-               (data.get('projectId', null) == null || (data.get('projectId', null) is string && data.get('projectId', null).size() <= 128)) &&
-               data.title is string && data.title.size() > 0 && data.title.size() <= 500 &&
-               (data.get('description', null) == null || (data.get('description', null) is string && data.get('description', null).size() <= 2000)) &&
-               data.status in ['active', 'completed', 'archived'] &&
-               (data.get('shareToken', null) == null || (data.get('shareToken', null) is string && data.get('shareToken', null).size() <= 512)) &&
-               (data.get('position', 0) == null || data.get('position', 0) is number) &&
-               (data.createdAt == request.time || data.createdAt is timestamp) &&
-               (data.updatedAt == request.time || data.updatedAt is timestamp);
+      function canAccessChecklist(requiredPerm) {
+        return isOwner(existing().userId) ||
+               (request.params.get('token', null) != null && hasAccess(request.params.token, checklistId, 'checklist', requiredPerm)) ||
+               (existing().get('projectId', null) != null && request.params.get('token', null) != null && hasAccess(request.params.token, existing().projectId, 'project', requiredPerm));
       }
 
-      allow get: if isValidId(checklistId) && ( 
-        (isSignedIn() && existing().userId == request.auth.uid) || 
-        (existing().get('shareToken', null) != null) || 
-        (existing().get('projectId', null) != null && (
-          isProjectShared(existing().projectId) || 
-          isProjectOwner(existing().projectId)
-        ))
-      );
-      allow list: if ( 
-        (isSignedIn() && resource.data.userId == request.auth.uid) || 
-        (resource.data.get('projectId', null) != null && (
-          isProjectShared(resource.data.projectId) ||
-          isProjectOwner(resource.data.projectId)
-        ))
-      ); 
+      allow get: if canAccessChecklist('view');
+      allow list: if isOwner(resource.data.userId) || 
+                    (resource.data.get('projectId', null) != null && request.params.get('token', null) != null && hasAccess(request.params.token, resource.data.projectId, 'project', 'view'));
       
-      allow create: if isValidId(checklistId) && (
-        (isVerified() && incoming().userId == request.auth.uid) || 
-        (incoming().get('projectId', null) != null && incoming().get('shareToken', null) != null && canEditProjectShared(incoming().get('shareToken', ''), incoming().projectId))
-      ) && isValidChecklist(incoming()) && incoming().createdAt == request.time && incoming().updatedAt == request.time;
-      
-      allow update: if isValidId(checklistId) && (
-        (isVerified() && existing().userId == request.auth.uid) || 
-        (existing().get('shareToken', null) != null && canEditShared(existing().get('shareToken', ''), checklistId)) ||
-        (existing().get('projectId', null) != null && incoming().get('shareToken', null) != null && canEditProjectShared(incoming().get('shareToken', ''), existing().projectId)) ||
-        // Allow project owner to update checklists linked to their project (needed for project deletion cleanup)
-        (existing().get('projectId', null) != null && isProjectOwner(existing().projectId))
-      ) && 
-      isValidChecklist(incoming()) &&
-      incoming().userId == existing().userId &&
-      incoming().createdAt == existing().createdAt &&
-      incoming().updatedAt == request.time;
+      allow create: if isVerified() && isOwner(incoming().userId);
+      allow update: if canAccessChecklist('edit');
+      allow delete: if isOwner(existing().userId);
 
-      allow delete: if isValidId(checklistId) && (
-        (isVerified() && existing().userId == request.auth.uid) || 
-        (existing().get('projectId', null) != null && isProjectOwner(existing().projectId))
-      );
-
-      // --- Checklist Items ---
+      // --- Items ---
       match /items/{itemId} {
-        function isValidItem(data) {
-          return data.checklistId == checklistId &&
-                 data.text is string && data.text.size() <= 2000 &&
-                 data.isDone is bool &&
-                 data.position is number && data.position >= 0 &&
-                 (data.get('photoUrl', null) == null || (data.photoUrl is string && data.photoUrl.size() <= 2048)) &&
-                 (data.get('photoUrls', null) == null || (data.photoUrls is list && data.photoUrls.size() <= 20)) &&
-                 (data.get('isCollapsed', null) == null || data.isCollapsed is bool) &&
-                 (data.get('commentCount', null) == null || data.commentCount is number) &&
-                 (data.get('parentId', null) == null || (data.parentId is string && data.parentId.size() <= 128)) &&
-                 (data.get('shareToken', null) == null || (data.shareToken is string && data.shareToken.size() <= 128)) &&
-                 (data.get('updatedAt', null) == null || data.updatedAt is timestamp) &&
-                 data.createdAt is timestamp;
-        }
+        allow read: if canAccessChecklist('view');
+        allow create, update, delete: if canAccessChecklist('edit');
 
-        function getChecklistOwner() {
-          return get(/databases/$(database)/documents/checklists/$(checklistId)).data.userId;
-        }
-
-        function getChecklistShareToken() {
-          return get(/databases/$(database)/documents/checklists/$(checklistId)).data.get('shareToken', null);
-        }
-
-        function getChecklistProjectId() {
-          return get(/databases/$(database)/documents/checklists/$(checklistId)).data.get('projectId', null);
-        }
-
-        allow get, list: if (isSignedIn() && getChecklistOwner() == request.auth.uid) || (getChecklistShareToken() != null) || 
-                            (getChecklistProjectId() != null && isProjectShared(getChecklistProjectId()));
-        
-        allow create: if ((isVerified() && getChecklistOwner() == request.auth.uid) || 
-                          (incoming().get('shareToken', null) != null && canEditShared(incoming().shareToken, checklistId)) ||
-                          (getChecklistProjectId() != null && incoming().get('shareToken', null) != null && canEditProjectShared(incoming().shareToken, getChecklistProjectId()))) &&
-                         isValidItem(incoming()) && (incoming().createdAt == request.time || incoming().createdAt is timestamp);
-        
-        allow update: if ((isVerified() && getChecklistOwner() == request.auth.uid) || 
-                          (incoming().get('shareToken', null) != null && canEditShared(incoming().shareToken, checklistId)) ||
-                          (getChecklistProjectId() != null && incoming().get('shareToken', null) != null && canEditProjectShared(incoming().shareToken, getChecklistProjectId()))) &&
-                         (
-                           incoming().diff(existing()).affectedKeys().hasOnly(['isDone', 'photoUrl', 'photoUrls', 'isCollapsed', 'shareToken', 'updatedAt', 'commentCount']) ||
-                           incoming().diff(existing()).affectedKeys().hasOnly(['text', 'position', 'parentId', 'shareToken', 'updatedAt', 'commentCount']) ||
-                           incoming().diff(existing()).affectedKeys().hasOnly(['commentCount'])
-                         );
-
-        allow delete: if (isVerified() && getChecklistOwner() == request.auth.uid) || 
-                         (getChecklistProjectId() != null && isProjectShared(getChecklistProjectId()) && canEditProjectShared(get(/databases/$(database)/documents/projects/$(getChecklistProjectId())).data.get('shareToken', null), getChecklistProjectId())) ||
-                         (getChecklistShareToken() != null && getShare(getChecklistShareToken()).permission == 'edit');
-
-        // --- Comments Subcollection ---
         match /comments/{commentId} {
-          function isValidComment(data) {
-            return data.itemId == itemId &&
-                   data.userId == request.auth.uid &&
-                   data.userName is string && data.userName.size() <= 100 &&
-                   data.text is string && data.text.size() <= 1000 &&
-                   data.createdAt is timestamp;
-          }
-
-          allow read: if (isSignedIn() && getChecklistOwner() == request.auth.uid) || (getChecklistShareToken() != null);
-          
-          allow create: if isValidId(commentId) && ((isVerified() && getChecklistOwner() == request.auth.uid) || (getChecklistShareToken() != null)) &&
-                         isValidComment(incoming()) && incoming().createdAt == request.time;
-          
-          allow update, delete: if isValidId(commentId) && isVerified() && existing().userId == request.auth.uid;
+          allow read: if canAccessChecklist('view');
+          allow create: if canAccessChecklist('view') && isSignedIn();
+          allow update, delete: if isOwner(existing().userId);
         }
       }
     }
 
     // --- Todos ---
     match /todos/{todoId} {
-      function isValidTodo(data) {
-        return data.userId is string && data.userId.size() <= 128 &&
-               (data.get('projectId', null) == null || (data.get('projectId', null) is string && data.get('projectId', null).size() <= 128)) &&
-               data.title is string && data.title.size() > 0 && data.title.size() <= 500 &&
-               (data.get('note', null) == null || (data.get('note', null) is string && data.get('note', null).size() <= 2000)) &&
-               data.isDone is bool &&
-               (data.get('shareToken', null) == null || (data.get('shareToken', null) is string && data.get('shareToken', null).size() <= 128)) &&
-               (data.createdAt == request.time || data.createdAt is timestamp) &&
-               (data.updatedAt == request.time || data.updatedAt is timestamp);
+      function canAccessTodo(requiredPerm) {
+        return isOwner(existing().userId) ||
+               (request.params.get('token', null) != null && hasAccess(request.params.token, todoId, 'todo', requiredPerm)) ||
+               (existing().get('projectId', null) != null && request.params.get('token', null) != null && hasAccess(request.params.token, existing().projectId, 'project', requiredPerm));
       }
 
-      allow get: if isValidId(todoId) && ( 
-        (isSignedIn() && resource.data.userId == request.auth.uid) || 
-        (resource.data.get('projectId', null) != null && (
-          isProjectShared(resource.data.get('projectId', '')) ||
-          isProjectOwner(resource.data.get('projectId', ''))
-        ))
-      );
-      allow list: if ( 
-        (isSignedIn() && resource.data.userId == request.auth.uid) || 
-        (resource.data.get('projectId', null) != null && (
-          isProjectShared(resource.data.get('projectId', '')) ||
-          isProjectOwner(resource.data.get('projectId', ''))
-        ))
-      );
-      allow create: if isValidId(todoId) && (
-                       (isVerified() && incoming().userId == request.auth.uid) ||
-                       (incoming().get('projectId', null) != null && incoming().get('shareToken', null) != null && canEditProjectShared(incoming().get('shareToken', ''), incoming().projectId))
-                     ) && 
-                       isValidTodo(incoming()) &&
-                       incoming().createdAt == request.time && 
-                       incoming().updatedAt == request.time;
-      allow update: if isValidId(todoId) && (
-                       (isVerified() && existing().userId == request.auth.uid) || 
-                       (existing().get('projectId', null) != null && incoming().get('shareToken', null) != null && canEditProjectShared(incoming().get('shareToken', ''), existing().projectId)) ||
-                       // Allow project owner to update todos linked to their project (needed for project deletion cleanup)
-                       (existing().get('projectId', null) != null && isProjectOwner(existing().projectId))
-                    ) &&
-                       isValidTodo(incoming()) &&
-                       incoming().userId == existing().userId &&
-                       incoming().createdAt == existing().createdAt &&
-                       incoming().updatedAt == request.time;
-
-      allow delete: if isValidId(todoId) && (
-                       (isVerified() && existing().userId == request.auth.uid) || 
-                       (existing().get('projectId', null) != null && isProjectOwner(existing().projectId))
-                    );
+      allow get: if canAccessTodo('view');
+      allow list: if isOwner(resource.data.userId) || 
+                    (resource.data.get('projectId', null) != null && request.params.get('token', null) != null && hasAccess(request.params.token, resource.data.projectId, 'project', 'view'));
+      allow create: if isVerified() && isOwner(incoming().userId);
+      allow update: if canAccessTodo('edit');
+      allow delete: if isOwner(existing().userId);
     }
 
-    // --- Shares ---
-    match /shares/{token} {
-      function isValidShareDoc(data) {
-        return data.checklistId is string &&
-               data.userId is string &&
-               data.token == token &&
-               data.permission in ['view', 'edit'] &&
-               data.revoked is bool &&
-               data.isPublic is bool &&
-               (data.get('sharedByName', null) == null || (data.get('sharedByName', null) is string && data.get('sharedByName', null).size() <= 200)) &&
-               (data.get('comment', null) == null || (data.get('comment', null) is string && data.get('comment', null).size() <= 1000)) &&
-               (data.createdAt == request.time || data.createdAt is timestamp);
-      }
-
-      allow get: if isValidId(token) && isSignedIn();
-      allow list: if isVerified() && (
-        resource.data.userId == request.auth.uid || 
-        get(/databases/$(database)/documents/checklists/$(resource.data.checklistId)).data.userId == request.auth.uid
-      );
-
-      allow create: if isValidId(token) && isVerified() && request.auth.uid == incoming().userId && 
-                       isValidShareDoc(incoming()) &&
-                       incoming().createdAt == request.time;
-      
-      allow update: if isValidId(token) && isVerified() && existing().userId == request.auth.uid &&
-                       isValidShareDoc(incoming()) &&
-                       incoming().userId == existing().userId &&
-                       incoming().checklistId == existing().checklistId &&
-                       incoming().token == existing().token &&
-                       incoming().createdAt == existing().createdAt &&
-                       incoming().diff(existing()).affectedKeys().hasOnly(['revoked', 'permission', 'isPublic', 'sharedByName', 'comment']);
-
-      allow delete: if isValidId(token) && isVerified() && (
-        existing().userId == request.auth.uid ||
-        get(/databases/$(database)/documents/checklists/$(existing().checklistId)).data.userId == request.auth.uid
-      );
+    // --- GuestSessions ---
+    match /guestSessions/{sessionId} {
+      allow get: if true; // Public for verification
+      allow create: if false; // Only via Admin/Server
+      allow update, delete: if false;
     }
-
-    match /projectShares/{token} {
-      function isValidProjectShareDoc(data) {
-        return data.projectId is string &&
-               data.userId is string &&
-               data.token == token &&
-               data.permission in ['view', 'edit'] &&
-               data.revoked is bool &&
-               data.isPublic is bool &&
-               (data.get('sharedByName', null) == null || (data.get('sharedByName', null) is string && data.get('sharedByName', null).size() <= 200)) &&
-               (data.get('comment', null) == null || (data.get('comment', null) is string && data.get('comment', null).size() <= 1000)) &&
-               (data.createdAt == request.time || data.createdAt is timestamp);
-      }
-
-      allow get: if isValidId(token) && isSignedIn();
-      allow list: if isVerified() && (
-        resource.data.userId == request.auth.uid || 
-        isProjectOwner(resource.data.projectId)
-      );
-
-      allow create: if isValidId(token) && isVerified() && request.auth.uid == incoming().userId && 
-                       isValidProjectShareDoc(incoming()) &&
-                       incoming().createdAt == request.time;
-      
-      allow update: if isValidId(token) && isVerified() && existing().userId == request.auth.uid &&
-                       isValidProjectShareDoc(incoming()) &&
-                       incoming().userId == existing().userId &&
-                       incoming().projectId == existing().projectId &&
-                       incoming().token == existing().token &&
-                       incoming().createdAt == existing().createdAt &&
-                       incoming().diff(existing()).affectedKeys().hasOnly(['revoked', 'permission', 'isPublic', 'sharedByName', 'comment']);
-
-      allow delete: if isValidId(token) && isVerified() && (
-        existing().userId == request.auth.uid ||
-        isProjectOwner(existing().projectId)
-      );
-    }
-
   }
 }

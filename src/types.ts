@@ -2,6 +2,33 @@ import { Timestamp } from 'firebase/firestore';
 
 export type ChecklistStatus = 'active' | 'completed' | 'archived';
 
+export type SharePermission = 'view' | 'edit';
+export type EntityType = 'checklist' | 'todo' | 'project';
+export type Visibility = 'public' | 'private';
+
+export interface ShareConfig {
+  id: string;
+  entityType: EntityType;
+  entityId: string;
+  token: string;
+  visibility: Visibility;
+  permission: SharePermission;
+  invitedEmails: string[];
+  createdBy: string;
+  createdAt: Timestamp;
+  expiresAt: Timestamp | null;
+  isActive: boolean;
+}
+
+export interface GuestSession {
+  id: string;
+  email: string;
+  shareToken: string;
+  magicToken: string;
+  sessionToken: string;
+  expiresAt: Timestamp;
+}
+
 export interface Project {
   id: string;
   userId: string;
@@ -9,7 +36,6 @@ export interface Project {
   description?: string;
   createdAt: Timestamp;
   updatedAt: Timestamp;
-  shareToken?: string;
 }
 
 export interface Checklist {
@@ -22,18 +48,15 @@ export interface Checklist {
   completedAt?: Timestamp | null;
   createdAt: Timestamp;
   updatedAt: Timestamp;
-  shareToken?: string;
   position?: number;
 }
-
-export type SharePermission = 'view' | 'edit';
 
 export interface ChecklistItem {
   id: string;
   checklistId: string;
   text: string;
   description?: string;
-  outcome?: 'success' | 'failure' | 'none';
+  outcome?: string;
   isDone: boolean;
   photoUrl: string | null;
   photoUrls?: string[];
@@ -63,37 +86,11 @@ export interface Todo {
   projectId?: string | null;
   title: string;
   description?: string;
-  outcome?: 'success' | 'failure' | 'none';
+  outcome?: string;
   note?: string;
   isDone: boolean;
   createdAt: Timestamp;
   updatedAt: Timestamp;
-}
-
-export interface ChecklistShare {
-  id: string;
-  checklistId: string;
-  userId: string;
-  token: string;
-  permission: SharePermission;
-  revoked: boolean;
-  isPublic: boolean;
-  sharedByName?: string;
-  comment?: string;
-  createdAt: Timestamp;
-}
-
-export interface ProjectShare {
-  id: string;
-  projectId: string;
-  userId: string;
-  token: string;
-  permission: SharePermission;
-  revoked: boolean;
-  isPublic: boolean;
-  sharedByName?: string;
-  comment?: string;
-  createdAt: Timestamp;
 }
 
 export interface FirestoreErrorInfo {

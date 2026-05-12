@@ -16,7 +16,8 @@ import {
   increment,
   arrayUnion,
   arrayRemove,
-  deleteField
+  deleteField,
+  limit
 } from 'firebase/firestore';
 import { 
   ref, 
@@ -25,7 +26,7 @@ import {
   deleteObject 
 } from 'firebase/storage';
 import { db, storage, auth } from '@/src/lib/firebase';
-import { Checklist, ChecklistItem, ChecklistShare, Todo, ItemComment, Project, ProjectShare } from '@/src/types';
+import { Checklist, ChecklistItem, Todo, ItemComment, Project, ShareConfig } from '@/src/types';
 import { processImage } from '@/src/lib/imageProcessing';
 
 enum OperationType {
@@ -515,16 +516,10 @@ export async function toggleItemCollapse(checklistId: string, itemId: string, is
 export async function uploadItemPhotos(checklistId: string, itemId: string, files: File[], shareToken?: string) {
   const opPath = `checklist-photos/${checklistId}/${itemId}/batch`;
 
-  // Handle potential auth persistence issues in iframe
+  // Note: If authentication is missing, uploads may fail based on storage rules.
+  // We avoid auto-signing in anonymously here because it might be disabled in the Firebase console.
   if (!auth.currentUser) {
-    console.warn('Auth currentUser is null at start of upload. Attempting anonymous fallback to ensure storage access...');
-    try {
-      const { signInAnonymously } = await import('firebase/auth');
-      await signInAnonymously(auth);
-      console.log('Anonymous sign-in successful for upload:', auth.currentUser?.uid);
-    } catch (e) {
-      console.error('Anonymous sign-in failed:', e);
-    }
+    console.warn('Auth currentUser is null. Upload might fail if anonymous auth is disabled or storage rules require auth.');
   }
 
   // Process and upload in parallel
@@ -597,102 +592,143 @@ export async function updateItemPhotosOrder(checklistId: string, itemId: string,
   }
 }
 
-// --- Sharing ---
+// --- Unified Sharing (ShareConfig) ---
 
-export async function createShare(
-  checklistId: string, 
-  userId: string, 
-  permission: 'view' | 'edit',
-  sharingOptions: { isPublic: boolean; sharedByName?: string; comment?: string }
-) {
-  const path = 'shares';
+export async function upsertShareConfig(config: Omit<ShareConfig, 'id' | 'createdAt'>) {
+  const path = 'shareConfigs';
   try {
-    const token = crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, '');
-    const shareDoc = {
-      checklistId,
-      userId,
-      token,
-      permission,
-      revoked: false,
-      isPublic: sharingOptions.isPublic,
-      sharedByName: sharingOptions.sharedByName || null,
-      comment: sharingOptions.comment || null,
-      createdAt: serverTimestamp()
-    };
-    await setDoc(doc(db, 'shares', token), shareDoc);
+    const q = query(
+      collection(db, 'shareConfigs'),
+      where('entityType', '==', config.entityType),
+      where('entityId', '==', config.entityId),
+      where('createdBy', '==', config.createdBy)
+    );
+    const existingSnap = await getDocs(q);
     
-    // Set shareToken on checklist to enable public read
-    await updateDoc(doc(db, 'checklists', checklistId), { 
-      shareToken: token,
-      updatedAt: serverTimestamp()
-    });
-    
-    // Tag all existing items with shareToken
-    const itemsSnap = await getDocs(collection(db, 'checklists', checklistId, 'items'));
-    const batch = writeBatch(db);
-    itemsSnap.forEach(itemDoc => {
-      batch.update(itemDoc.ref, { shareToken: token });
-    });
-    await batch.commit();
-
-    return token;
+    if (!existingSnap.empty) {
+      const docRef = existingSnap.docs[0].ref;
+      await updateDoc(docRef, {
+        ...config,
+        updatedAt: serverTimestamp() // Note: types.ts should have updatedAt if needed, but blueprint uses createdAt. We'll stick to config data.
+      });
+      return { id: docRef.id, ...config };
+    } else {
+      const docRef = doc(collection(db, 'shareConfigs'), config.token);
+      const payload = {
+        ...config,
+        id: config.token,
+        createdAt: serverTimestamp()
+      };
+      await setDoc(docRef, payload);
+      return payload;
+    }
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
   }
 }
 
-export function subscribeToShares(checklistId: string, callback: (shares: ChecklistShare[]) => void) {
-  const path = 'shares';
-  if (!auth.currentUser) return () => {};
-  
+export async function resolveShareToken(token: string) {
+  const path = `shareConfigs/${token}`;
+  try {
+    const shareSnap = await getDoc(doc(db, 'shareConfigs', token));
+    if (!shareSnap.exists()) return null;
+    
+    const share = { id: shareSnap.id, ...shareSnap.data() } as ShareConfig;
+    if (!share.isActive) return null;
+    
+    // Check expiry
+    if (share.expiresAt && share.expiresAt.toMillis() < Date.now()) {
+      // Auto-deactivate if expired
+      await updateDoc(doc(db, 'shareConfigs', token), { isActive: false });
+      return null;
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let entityData: any = null;
+    if (share.entityType === 'project') {
+      entityData = await getProject(share.entityId);
+    } else if (share.entityType === 'checklist') {
+      const snap = await getDoc(doc(db, 'checklists', share.entityId));
+      if (snap.exists()) entityData = { id: snap.id, ...snap.data() };
+    } else if (share.entityType === 'todo') {
+      const snap = await getDoc(doc(db, 'todos', share.entityId));
+      if (snap.exists()) entityData = { id: snap.id, ...snap.data() };
+    }
+
+    if (!entityData) return null;
+
+    return {
+      share,
+      entity: entityData,
+      permission: share.permission
+    };
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, path);
+  }
+}
+
+export async function revokeShare(token: string) {
+  const path = `shareConfigs/${token}/revoke`;
+  try {
+    await updateDoc(doc(db, 'shareConfigs', token), { isActive: false });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function updateInvitedEmails(token: string, emails: string[]) {
+  const path = `shareConfigs/${token}/invites`;
+  try {
+    const uniqueEmails = Array.from(new Set(emails));
+    await updateDoc(doc(db, 'shareConfigs', token), { invitedEmails: uniqueEmails });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export function subscribeToShareConfig(entityId: string, callback: (config: ShareConfig | null) => void) {
   const q = query(
-    collection(db, 'shares'),
-    where('checklistId', '==', checklistId),
-    where('userId', '==', auth.currentUser.uid),
-    orderBy('createdAt', 'desc')
+    collection(db, 'shareConfigs'),
+    where('entityId', '==', entityId),
+    where('isActive', '==', true),
+    limit(1)
   );
   
   return onSnapshot(q, (snapshot) => {
-    const shares = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as ChecklistShare));
-    callback(shares);
-  }, (error) => {
-    handleFirestoreError(error, OperationType.LIST, path);
+    if (!snapshot.empty) {
+      callback({ id: snapshot.docs[0].id, ...snapshot.docs[0].data() } as ShareConfig);
+    } else {
+      callback(null);
+    }
   });
 }
 
-export async function updateSharePermission(token: string, permission: 'view' | 'edit') {
-  const path = `shares/${token}`;
-  try {
-    await updateDoc(doc(db, 'shares', token), { permission });
-  } catch (error) {
-    handleFirestoreError(error, OperationType.UPDATE, path);
-  }
+// --- Guest Access ---
+
+export async function requestGuestAccess(email: string, shareToken: string) {
+  const response = await fetch('/api/share/guest/request', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, shareToken })
+  });
+  return response.json();
 }
 
-export async function deleteShare(token: string, checklistId: string) {
-  const path = `shares/${token}`;
-  try {
-    // 1. Delete the share doc
-    await deleteDoc(doc(db, 'shares', token));
-    
-    // 2. If this was the active shareToken on the checklist, null it out
-    const checklistRef = doc(db, 'checklists', checklistId);
-    const checklistSnap = await getDoc(checklistRef);
-    if (checklistSnap.exists() && checklistSnap.data().shareToken === token) {
-      await updateDoc(checklistRef, { shareToken: null });
-    }
-  } catch (error) {
-    handleFirestoreError(error, OperationType.DELETE, path);
+export async function verifyGuestMagicToken(magicToken: string) {
+  const response = await fetch('/api/share/guest/verify', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ magicToken })
+  });
+  const data = await response.json();
+  if (data.success && data.sessionToken) {
+    localStorage.setItem('guest_session', data.sessionToken);
   }
+  return data;
 }
 
-export async function toggleShareRevoked(token: string, revoked: boolean) {
-  const path = `shares/${token}`;
-  try {
-    await updateDoc(doc(db, 'shares', token), { revoked });
-  } catch (error) {
-    handleFirestoreError(error, OperationType.UPDATE, path);
-  }
+export function getGuestSessionToken() {
+  return localStorage.getItem('guest_session');
 }
 
 // --- Todos ---
@@ -778,105 +814,9 @@ export function subscribeToComments(checklistId: string, itemId: string, callbac
   });
 }
 
-// --- Project Sharing ---
+// --- Interaction Helpers ---
 
-export async function createProjectShare(
-  projectId: string, 
-  userId: string, 
-  permission: 'view' | 'edit',
-  sharingOptions: { isPublic: boolean; sharedByName?: string; comment?: string }
-) {
-  const path = 'projectShares';
-  try {
-    const token = crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, '');
-    const shareDoc = {
-      projectId,
-      userId,
-      token,
-      permission,
-      revoked: false,
-      isPublic: sharingOptions.isPublic,
-      sharedByName: sharingOptions.sharedByName || null,
-      comment: sharingOptions.comment || null,
-      createdAt: serverTimestamp()
-    };
-    await setDoc(doc(db, 'projectShares', token), shareDoc);
-    
-    // Set shareToken on project to enable public read
-    await updateDoc(doc(db, 'projects', projectId), { 
-      shareToken: token,
-      updatedAt: serverTimestamp()
-    });
-    
-    return token;
-  } catch (error) {
-    handleFirestoreError(error, OperationType.WRITE, path);
-  }
-}
-
-export function subscribeToProjectShares(projectId: string, userId: string, callback: (shares: ProjectShare[]) => void) {
-  const path = 'projectShares';
-  const q = query(
-    collection(db, 'projectShares'),
-    where('projectId', '==', projectId),
-    where('userId', '==', userId),
-    orderBy('createdAt', 'desc')
-  );
-  
-  return onSnapshot(q, (snapshot) => {
-    const shares = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as ProjectShare));
-    callback(shares);
-  }, (error) => {
-    handleFirestoreError(error, OperationType.LIST, path);
-  });
-}
-
-export async function deleteProjectShare(token: string, projectId: string) {
-  const path = `projectShares/${token}`;
-  try {
-    await deleteDoc(doc(db, 'projectShares', token));
-    
-    const projectRef = doc(db, 'projects', projectId);
-    const projectSnap = await getDoc(projectRef);
-    if (projectSnap.exists() && projectSnap.data().shareToken === token) {
-      await updateDoc(projectRef, { shareToken: null });
-    }
-  } catch (error) {
-    handleFirestoreError(error, OperationType.DELETE, path);
-  }
-}
-
-export async function getSharedProject(token: string) {
-  const path = `projectShares/${token} (join)`;
-  try {
-    const shareSnap = await getDoc(doc(db, 'projectShares', token));
-    if (!shareSnap.exists() || shareSnap.data()?.revoked) {
-      throw new Error('Invalid or revoked share link');
-    }
-    const share = shareSnap.data() as ProjectShare;
-    const projectSnap = await getDoc(doc(db, 'projects', share.projectId));
-    if (!projectSnap.exists()) throw new Error('Project not found');
-
-    const project = { id: projectSnap.id, ...projectSnap.data() } as Project;
-    
-    // Also fetch associated items
-    const checklistsSnap = await getDocs(query(collection(db, 'checklists'), where('projectId', '==', project.id)));
-    const todosSnap = await getDocs(query(collection(db, 'todos'), where('projectId', '==', project.id)));
-    
-    const checklists = checklistsSnap.docs.map(d => ({ id: d.id, ...d.data() } as Checklist));
-    const todos = todosSnap.docs.map(d => ({ id: d.id, ...d.data() } as Todo));
-
-    return { 
-      project,
-      checklists,
-      todos,
-      permission: share.permission,
-      shareMetadata: share 
-    };
-  } catch (error) {
-    handleFirestoreError(error, OperationType.GET, path);
-  }
-}
+// --- Guest Access Functions ---
 
 export async function addComment(checklistId: string, itemId: string, userId: string, userName: string, text: string, shareToken?: string | null) {
   const path = `checklists/${checklistId}/items/${itemId}/comments`;
@@ -963,23 +903,4 @@ export async function moveTodoToChecklist(todo: Todo, checklistId: string | 'new
   }
 }
 
-export async function getSharedChecklist(token: string) {
-  const path = `shares/${token} (join)`;
-  try {
-    const shareSnap = await getDoc(doc(db, 'shares', token));
-    if (!shareSnap.exists() || shareSnap.data()?.revoked) {
-      throw new Error('Invalid or revoked share link');
-    }
-    const share = shareSnap.data() as ChecklistShare;
-    const listSnap = await getDoc(doc(db, 'checklists', share.checklistId));
-    if (!listSnap.exists()) throw new Error('Checklist not found');
-    
-    return { 
-      checklist: { id: listSnap.id, ...listSnap.data() } as Checklist, 
-      permission: share.permission,
-      shareMetadata: share 
-    };
-  } catch (error) {
-    handleFirestoreError(error, OperationType.GET, path);
-  }
-}
+
