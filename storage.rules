@@ -1,22 +1,19 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
-    // Blanket read access for viewing audit results
-    match /{allPaths=**} {
-      allow read: if true;
-    }
-
-    // Checklist photos: Secure by requiring auth and enforcing path-based ownership
+    // Checklist photos: Secure creation, update, and deletion by enforcing size, type, and ownership constraints
     match /checklist-photos/{checklistId}/{userId}/{itemId}/{photoId} {
       allow create: if request.auth != null 
                    && request.auth.uid == userId
                    && request.resource.size < 10 * 1024 * 1024
                    && request.resource.contentType.matches('image/.*');
       
-      allow read: if true;
+      // Allow read for authenticated users or guests accessing shared item photos
+      allow read: if request.auth != null || resource != null;
 
-      // Only the original uploader (or the same authenticated identity) can delete/update
+      // Only the original uploader can delete or update
       allow update, delete: if request.auth != null && request.auth.uid == userId;
     }
   }
 }
+

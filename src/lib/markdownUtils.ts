@@ -13,7 +13,12 @@ export function generateMarkdown(items: (ChecklistItem | Todo)[]): string {
     const nest = (parentId: string | null = null, level: number = 0): string => {
       return checklistItems
         .filter(item => item.parentId === parentId)
-        .sort((a, b) => a.position - b.position)
+        .sort((a, b) => {
+          if (a.isDone !== b.isDone) {
+            return a.isDone ? 1 : -1;
+          }
+          return a.position - b.position;
+        })
         .map(item => {
           const indent = '  '.repeat(level);
           const checkbox = item.isDone ? '[x]' : '[ ]';

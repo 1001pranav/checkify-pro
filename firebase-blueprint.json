@@ -65,6 +65,27 @@
         "expiresAt": { "type": "string", "format": "date-time" }
       },
       "required": ["email", "shareToken", "magicToken", "sessionToken", "expiresAt"]
+    },
+    "Todo": {
+      "title": "Todo Item",
+      "description": "An individual todo task in the user's action list.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "projectId": { "type": "string" },
+        "title": { "type": "string" },
+        "note": { "type": "string" },
+        "description": { "type": "string" },
+        "outcome": { "type": "string" },
+        "isDone": { "type": "boolean" },
+        "priority": { "type": "string", "enum": ["low", "medium", "high", "urgent"] },
+        "dueDate": { "type": "string" },
+        "category": { "type": "string", "description": "Custom or preset category string" },
+        "shareToken": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "title", "isDone", "createdAt", "updatedAt"]
     }
   },
   "firestore": {

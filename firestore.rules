@@ -33,6 +33,12 @@ service cloud.firestore {
              (getShare(token).visibility == 'public' || (isSignedIn() && request.auth.token.email in getShare(token).invitedEmails));
     }
 
+    function isPubliclyShared(data, entityId, entityType) {
+      return data.get('shareToken', null) != null && 
+             isValidShare(data.shareToken, entityId, entityType) &&
+             getShare(data.shareToken).visibility == 'public';
+    }
+
     // --- Users ---
     match /users/{userId} {
       allow read, write: if isOwner(userId);
@@ -41,67 +47,78 @@ service cloud.firestore {
     // --- ShareConfigs ---
     match /shareConfigs/{token} {
       allow get: if isValidId(token);
-      allow create: if isVerified() && isOwner(incoming().createdBy);
-      allow update: if isVerified() && isOwner(existing().createdBy) && 
-                       incoming().createdBy == existing().createdBy &&
-                       incoming().token == existing().token;
-      allow delete: if isVerified() && isOwner(existing().createdBy);
+      allow list: if isSignedIn();
+      allow create: if isSignedIn() && isOwner(incoming().createdBy);
+      allow update: if isSignedIn() && isOwner(existing().createdBy) && 
+                       incoming().createdBy == existing().createdBy;
+      allow delete: if isSignedIn() && isOwner(existing().createdBy);
     }
 
     // --- Projects ---
     match /projects/{projectId} {
-      allow get: if isOwner(resource.data.userId) || 
-                    (request.params.get('token', null) != null && hasAccess(request.params.token, projectId, 'project', 'view'));
-      allow list: if isOwner(resource.data.userId);
+      allow get: if isOwner(resource.data.userId) || isPubliclyShared(resource.data, projectId, 'project');
+      allow list: if isOwner(resource.data.userId) || isPubliclyShared(resource.data, projectId, 'project');
       allow create: if isVerified() && isOwner(incoming().userId);
-      allow update: if isOwner(existing().userId) || 
-                       (request.params.get('token', null) != null && hasAccess(request.params.token, projectId, 'project', 'edit'));
+      allow update: if isOwner(existing().userId);
       allow delete: if isOwner(existing().userId);
     }
 
     // --- Checklists ---
     match /checklists/{checklistId} {
-      function canAccessChecklist(requiredPerm) {
-        return isOwner(existing().userId) ||
-               (request.params.get('token', null) != null && hasAccess(request.params.token, checklistId, 'checklist', requiredPerm)) ||
-               (existing().get('projectId', null) != null && request.params.get('token', null) != null && hasAccess(request.params.token, existing().projectId, 'project', requiredPerm));
+      function canAccessChecklist(data, requiredPerm) {
+        return isOwner(data.userId) ||
+               (data.get('shareToken', null) != null && hasAccess(data.shareToken, checklistId, 'checklist', requiredPerm)) ||
+               (data.get('projectId', null) != null && 
+                get(/databases/$(database)/documents/projects/$(data.projectId)).data.get('shareToken', null) != null &&
+                hasAccess(get(/databases/$(database)/documents/projects/$(data.projectId)).data.shareToken, data.projectId, 'project', requiredPerm));
       }
 
-      allow get: if canAccessChecklist('view');
-      allow list: if isOwner(resource.data.userId) || 
-                    (resource.data.get('projectId', null) != null && request.params.get('token', null) != null && hasAccess(request.params.token, resource.data.projectId, 'project', 'view'));
+      allow get: if canAccessChecklist(resource.data, 'view');
+      allow list: if canAccessChecklist(resource.data, 'view');
       
-      allow create: if isVerified() && isOwner(incoming().userId);
-      allow update: if canAccessChecklist('edit');
-      allow delete: if isOwner(existing().userId);
+      allow create: if (isVerified() && isOwner(incoming().userId)) || 
+                       canAccessChecklist(incoming(), 'edit');
+      allow update: if canAccessChecklist(resource.data, 'edit');
+      allow delete: if isOwner(resource.data.userId);
 
       // --- Items ---
       match /items/{itemId} {
-        allow read: if canAccessChecklist('view');
-        allow create, update, delete: if canAccessChecklist('edit');
+        // Items inherit from their parent checklist
+        function getChecklist() {
+          return exists(/databases/$(database)/documents/checklists/$(checklistId))
+            ? get(/databases/$(database)/documents/checklists/$(checklistId)).data
+            : null;
+        }
+
+        allow read: if getChecklist() != null && canAccessChecklist(getChecklist(), 'view');
+        allow create, update: if getChecklist() != null && canAccessChecklist(getChecklist(), 'edit');
+        allow delete: if getChecklist() == null || canAccessChecklist(getChecklist(), 'edit');
 
         match /comments/{commentId} {
-          allow read: if canAccessChecklist('view');
-          allow create: if canAccessChecklist('view') && isSignedIn();
-          allow update, delete: if isOwner(existing().userId);
+          allow read: if getChecklist() != null && canAccessChecklist(getChecklist(), 'view');
+          allow create: if getChecklist() != null && canAccessChecklist(getChecklist(), 'view') && (isSignedIn() || getChecklist().get('projectId', null) != null);
+          allow update: if isOwner(resource.data.userId);
+          allow delete: if getChecklist() == null || isOwner(resource.data.userId) || isOwner(getChecklist().userId);
         }
       }
     }
 
     // --- Todos ---
     match /todos/{todoId} {
-      function canAccessTodo(requiredPerm) {
-        return isOwner(existing().userId) ||
-               (request.params.get('token', null) != null && hasAccess(request.params.token, todoId, 'todo', requiredPerm)) ||
-               (existing().get('projectId', null) != null && request.params.get('token', null) != null && hasAccess(request.params.token, existing().projectId, 'project', requiredPerm));
+      function canAccessTodo(data, requiredPerm) {
+        return isOwner(data.userId) ||
+               (data.get('shareToken', null) != null && hasAccess(data.shareToken, todoId, 'todo', requiredPerm)) ||
+               (data.get('projectId', null) != null && 
+                get(/databases/$(database)/documents/projects/$(data.projectId)).data.get('shareToken', null) != null &&
+                hasAccess(get(/databases/$(database)/documents/projects/$(data.projectId)).data.shareToken, data.projectId, 'project', requiredPerm));
       }
 
-      allow get: if canAccessTodo('view');
-      allow list: if isOwner(resource.data.userId) || 
-                    (resource.data.get('projectId', null) != null && request.params.get('token', null) != null && hasAccess(request.params.token, resource.data.projectId, 'project', 'view'));
-      allow create: if isVerified() && isOwner(incoming().userId);
-      allow update: if canAccessTodo('edit');
-      allow delete: if isOwner(existing().userId);
+      allow get: if canAccessTodo(resource.data, 'view');
+      allow list: if canAccessTodo(resource.data, 'view');
+      allow create: if (isVerified() && isOwner(incoming().userId)) ||
+                       canAccessTodo(incoming(), 'edit');
+      allow update: if canAccessTodo(resource.data, 'edit');
+      allow delete: if isOwner(resource.data.userId);
     }
 
     // --- GuestSessions ---

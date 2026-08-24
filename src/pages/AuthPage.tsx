@@ -125,7 +125,7 @@ export default function AuthPage() {
   }
 
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen p-4 space-y-12 bg-slate-50">
+    <div className="flex flex-col items-center justify-center min-h-screen p-4 space-y-8 bg-slate-50">
       <div className="flex flex-col items-center gap-4 text-center">
         <div className="w-20 h-20 bg-indigo-600 rounded-2xl flex items-center justify-center text-white font-black text-5xl border-4 border-slate-900 shadow-bento-lg transform -rotate-3 transition-transform hover:rotate-0">✓</div>
         <div>
@@ -134,126 +134,7 @@ export default function AuthPage() {
         </div>
       </div>
       
-      <Tabs defaultValue="login" className="w-full max-w-md">
-        <TabsList className="grid w-full grid-cols-2 bg-slate-100 p-1.5 rounded-2xl border-2 border-slate-900 mb-6">
-          <TabsTrigger value="login" className="rounded-xl font-black uppercase text-xs">Login</TabsTrigger>
-          <TabsTrigger value="signup" className="rounded-xl font-black uppercase text-xs">Sign Up</TabsTrigger>
-        </TabsList>
-        
-        <TabsContent value="login">
-          <Card className="bento-card p-4">
-            <CardHeader className="pb-6">
-              <CardTitle className="text-2xl font-black uppercase tracking-tight">Welcome Commander</CardTitle>
-              <CardDescription className="font-bold text-slate-400 uppercase text-[10px] tracking-widest">Access your secure verification logs</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <form onSubmit={handleLogin} className="space-y-6">
-                <div className="space-y-4">
-                  <div className="space-y-2">
-                    <Label className="text-[10px] font-black uppercase tracking-widest ml-1">Secure Email</Label>
-                    <Input 
-                      type="email" 
-                      placeholder="alex@audit.pro" 
-                      className="h-14 border-2 border-slate-900 rounded-xl bg-slate-50 font-bold focus-visible:ring-indigo-600/20"
-                      value={email} 
-                      onChange={(e) => setEmail(e.target.value)} 
-                      required 
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label className="text-[10px] font-black uppercase tracking-widest ml-1">Access Token</Label>
-                    <div className="relative">
-                      <Input 
-                        type={showPassword ? "text" : "password"} 
-                        placeholder="••••••••" 
-                        className="h-14 border-2 border-slate-900 rounded-xl bg-slate-50 font-bold focus-visible:ring-indigo-600/20 pr-12"
-                        value={password} 
-                        onChange={(e) => setPassword(e.target.value)} 
-                        required 
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowPassword(!showPassword)}
-                        className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-900 transition-colors"
-                      >
-                        {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-                <Button type="submit" className="bento-button w-full h-14 bg-indigo-600 text-white text-sm" disabled={loading}>
-                  {loading ? 'INITIALIZING...' : 'AUTHORIZE ACCESS'}
-                </Button>
-              </form>
-            </CardContent>
-            <CardFooter className="flex flex-col pt-2 pb-2">
-              <Button variant="link" size="sm" onClick={() => setIsResetting(true)} className="text-[10px] font-black uppercase tracking-widest text-slate-400 hover:text-indigo-600">
-                Recovery Lost Credentials?
-              </Button>
-            </CardFooter>
-          </Card>
-        </TabsContent>
-        
-        <TabsContent value="signup">
-          <Card className="bento-card p-4">
-            <CardHeader className="pb-6">
-              <CardTitle className="text-2xl font-black uppercase tracking-tight">New Operative</CardTitle>
-              <CardDescription className="font-bold text-slate-400 uppercase text-[10px] tracking-widest">Register a new audit identifier</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <form onSubmit={handleSignUp} className="space-y-6">
-                <div className="space-y-4">
-                  <div className="space-y-2">
-                    <Label className="text-[10px] font-black uppercase tracking-widest ml-1">Designate Email</Label>
-                    <Input 
-                      type="email" 
-                      placeholder="commander@veri.check" 
-                      className="h-14 border-2 border-slate-900 rounded-xl bg-slate-50 font-bold focus-visible:ring-indigo-600/20"
-                      value={email} 
-                      onChange={(e) => setEmail(e.target.value)} 
-                      required 
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label className="text-[10px] font-black uppercase tracking-widest ml-1">Secure Password</Label>
-                    <div className="relative">
-                      <Input 
-                        type={showPassword ? "text" : "password"} 
-                        placeholder="••••••••" 
-                        className="h-14 border-2 border-slate-900 rounded-xl bg-slate-50 font-bold focus-visible:ring-indigo-600/20 pr-12"
-                        value={password} 
-                        onChange={(e) => setPassword(e.target.value)} 
-                        required 
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowPassword(!showPassword)}
-                        className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-900 transition-colors"
-                      >
-                        {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-                <Button type="submit" className="bento-button w-full h-14 bg-indigo-600 text-white text-sm" disabled={loading}>
-                  {loading ? 'DEPLOYING...' : 'INITIALIZE ACCOUNT'}
-                </Button>
-              </form>
-            </CardContent>
-          </Card>
-        </TabsContent>
-      </Tabs>
-
       <div className="w-full max-w-md space-y-6">
-        <div className="relative">
-          <div className="absolute inset-0 flex items-center">
-            <span className="w-full border-t-2 border-slate-900 border-dashed" />
-          </div>
-          <div className="relative flex justify-center text-[10px] font-black uppercase">
-            <span className="bg-slate-50 px-2 text-slate-400">Secure Protocol Bridge</span>
-          </div>
-        </div>
-
         <Button 
           type="button" 
           onClick={handleGoogleLogin} 
@@ -269,6 +150,125 @@ export default function AuthPage() {
           </svg>
           Authorize with Google
         </Button>
+
+        <div className="relative">
+          <div className="absolute inset-0 flex items-center">
+            <span className="w-full border-t-2 border-slate-900 border-dashed" />
+          </div>
+          <div className="relative flex justify-center text-[10px] font-black uppercase">
+            <span className="bg-slate-50 px-2 text-slate-400">Or Continue With Email</span>
+          </div>
+        </div>
+
+        <Tabs defaultValue="login" className="w-full">
+          <TabsList className="grid w-full grid-cols-2 bg-slate-100 p-1.5 rounded-2xl border-2 border-slate-900 mb-6">
+            <TabsTrigger value="login" className="rounded-xl font-black uppercase text-xs">Login</TabsTrigger>
+            <TabsTrigger value="signup" className="rounded-xl font-black uppercase text-xs">Sign Up</TabsTrigger>
+          </TabsList>
+          
+          <TabsContent value="login">
+            <Card className="bento-card p-4">
+              <CardHeader className="pb-6">
+                <CardTitle className="text-2xl font-black uppercase tracking-tight">Welcome Commander</CardTitle>
+                <CardDescription className="font-bold text-slate-400 uppercase text-[10px] tracking-widest">Access your secure verification logs</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <form onSubmit={handleLogin} className="space-y-6">
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                      <Label className="text-[10px] font-black uppercase tracking-widest ml-1">Secure Email</Label>
+                      <Input 
+                        type="email" 
+                        placeholder="alex@audit.pro" 
+                        className="h-14 border-2 border-slate-900 rounded-xl bg-slate-50 font-bold focus-visible:ring-indigo-600/20"
+                        value={email} 
+                        onChange={(e) => setEmail(e.target.value)} 
+                        required 
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-[10px] font-black uppercase tracking-widest ml-1">Access Token</Label>
+                      <div className="relative">
+                        <Input 
+                          type={showPassword ? "text" : "password"} 
+                          placeholder="••••••••" 
+                          className="h-14 border-2 border-slate-900 rounded-xl bg-slate-50 font-bold focus-visible:ring-indigo-600/20 pr-12"
+                          value={password} 
+                          onChange={(e) => setPassword(e.target.value)} 
+                          required 
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowPassword(!showPassword)}
+                          className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-900 transition-colors"
+                        >
+                          {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                  <Button type="submit" className="bento-button w-full h-14 bg-indigo-600 text-white text-sm" disabled={loading}>
+                    {loading ? 'INITIALIZING...' : 'AUTHORIZE ACCESS'}
+                  </Button>
+                </form>
+              </CardContent>
+              <CardFooter className="flex flex-col pt-2 pb-2">
+                <Button variant="link" size="sm" onClick={() => setIsResetting(true)} className="text-[10px] font-black uppercase tracking-widest text-slate-400 hover:text-indigo-600">
+                  Recovery Lost Credentials?
+                </Button>
+              </CardFooter>
+            </Card>
+          </TabsContent>
+          
+          <TabsContent value="signup">
+            <Card className="bento-card p-4">
+              <CardHeader className="pb-6">
+                <CardTitle className="text-2xl font-black uppercase tracking-tight">New Operative</CardTitle>
+                <CardDescription className="font-bold text-slate-400 uppercase text-[10px] tracking-widest">Register a new audit identifier</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <form onSubmit={handleSignUp} className="space-y-6">
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                      <Label className="text-[10px] font-black uppercase tracking-widest ml-1">Designate Email</Label>
+                      <Input 
+                        type="email" 
+                        placeholder="commander@veri.check" 
+                        className="h-14 border-2 border-slate-900 rounded-xl bg-slate-50 font-bold focus-visible:ring-indigo-600/20"
+                        value={email} 
+                        onChange={(e) => setEmail(e.target.value)} 
+                        required 
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-[10px] font-black uppercase tracking-widest ml-1">Secure Password</Label>
+                      <div className="relative">
+                        <Input 
+                          type={showPassword ? "text" : "password"} 
+                          placeholder="••••••••" 
+                          className="h-14 border-2 border-slate-900 rounded-xl bg-slate-50 font-bold focus-visible:ring-indigo-600/20 pr-12"
+                          value={password} 
+                          onChange={(e) => setPassword(e.target.value)} 
+                          required 
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowPassword(!showPassword)}
+                          className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-900 transition-colors"
+                        >
+                          {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                  <Button type="submit" className="bento-button w-full h-14 bg-indigo-600 text-white text-sm" disabled={loading}>
+                    {loading ? 'DEPLOYING...' : 'INITIALIZE ACCOUNT'}
+                  </Button>
+                </form>
+              </CardContent>
+            </Card>
+          </TabsContent>
+        </Tabs>
       </div>
     </div>
   );

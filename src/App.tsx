@@ -39,16 +39,8 @@ export default function App() {
                 <Projects />
               </ProtectedRoute>
             } />
-            <Route path="/project/:id" element={
-              <ProtectedRoute>
-                <ProjectDetail />
-              </ProtectedRoute>
-            } />
-            <Route path="/checklist/:id" element={
-              <ProtectedRoute>
-                <ChecklistDetail />
-              </ProtectedRoute>
-            } />
+            <Route path="/project/:id" element={<ProjectDetail />} />
+            <Route path="/checklist/:id" element={<ChecklistDetail />} />
             <Route path="/s/:token" element={<SharedPage />} />
             <Route path="*" element={<Navigate to="/" />} />
           </Routes>

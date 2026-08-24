@@ -26,11 +26,14 @@ import {
   CheckSquare, 
   Clock, 
   Trash2,
-  Share2
+  Share2,
+  Copy
 } from 'lucide-react';
 import { TodoItem } from '@/src/components/Todo/TodoItem';
 import { motion, AnimatePresence } from 'motion/react';
 import Navbar from '@/src/components/Navbar';
+import { ConfirmDeleteModal } from '@/src/components/ConfirmDeleteModal';
+import { generateMarkdown } from '@/src/lib/markdownUtils';
 import {
   Dialog,
   DialogContent,
@@ -63,15 +66,51 @@ export default function ProjectDetail() {
   const [newTodoTitle, setNewTodoTitle] = useState('');
   const [itemLoading, setItemLoading] = useState(false);
 
+  // Delete modal states
+  const [deleteType, setDeleteType] = useState<'project' | 'checklist' | 'todo' | null>(null);
+  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
+
+  // Keyboard shortcut listeners: N to create, Esc to close
   useEffect(() => {
-    if (!user || !id) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      const isInput = target && (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable);
+
+      if (e.key === 'Escape') {
+        if (isChecklistDialogOpen) setIsChecklistDialogOpen(false);
+        if (isTodoDialogOpen) setIsTodoDialogOpen(false);
+        if (isShareDialogOpen) setIsShareDialogOpen(false);
+        if (document.activeElement instanceof HTMLElement) {
+          document.activeElement.blur();
+        }
+        return;
+      }
+
+      if (isInput) return;
+
+      if (e.key === 'n' || e.key === 'N') {
+        e.preventDefault();
+        if (activeTab === 'todos') {
+          setIsTodoDialogOpen(true);
+        } else {
+          setIsChecklistDialogOpen(true);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isChecklistDialogOpen, isTodoDialogOpen, isShareDialogOpen, activeTab]);
+
+  useEffect(() => {
+    if (!id) return;
     
     const fetchProject = async () => {
       try {
         const data = await getProject(id);
         if (!data) {
-          toast.error('Project not found');
-          navigate('/projects');
+          toast.error('Project not found or inaccessible');
+          if (user) navigate('/projects');
           return;
         }
         setProject(data);
@@ -82,11 +121,17 @@ export default function ProjectDetail() {
     
     fetchProject();
     
-    const unsubChecklists = subscribeToChecklists(user.uid, (data) => {
+    // Only subscribe to lists/todos if we have a user (owner view) 
+    // or if the project itself handles its own sharing state.
+    // For guests, we primarily use the SharedPage, but we add a safety here.
+    const projectUserId = project?.userId || user?.uid;
+    if (!projectUserId) return;
+
+    const unsubChecklists = subscribeToChecklists(projectUserId, (data) => {
       setChecklists(data);
     }, id);
     
-    const unsubTodos = subscribeToTodos(user.uid, (data) => {
+    const unsubTodos = subscribeToTodos(projectUserId, (data) => {
       setTodos(data);
       setLoading(false);
     }, id);
@@ -98,19 +143,46 @@ export default function ProjectDetail() {
       unsubTodos();
       unsubShare();
     };
-  }, [user, id, navigate]);
+  }, [user, id, navigate, project?.userId]);
 
-  const handleDeleteProject = async () => {
-    if (!id) return;
-    if (confirm('Delete this project? Association will be removed from all checklists and todos.')) {
-      try {
-        await deleteProject(id);
+  const handlePromptDeleteProject = () => {
+    setDeleteType('project');
+    setDeleteTargetId(id || null);
+  };
+
+  const handleDeleteChecklistClick = (e: React.MouseEvent, cid: string) => {
+    e.stopPropagation();
+    setDeleteType('checklist');
+    setDeleteTargetId(cid);
+  };
+
+  const handleDeleteTodoClick = (tid: string) => {
+    setDeleteType('todo');
+    setDeleteTargetId(tid);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!deleteTargetId || !deleteType) return;
+    setDeleteLoading(true);
+    try {
+      if (deleteType === 'project') {
+        await deleteProject(deleteTargetId);
         toast.success('Project cluster dissolved');
         navigate('/projects');
-      } catch (err) {
-        console.error('Dissolve failed:', err);
-        toast.error('Failed to dissolve project cluster');
+      } else if (deleteType === 'checklist') {
+        await deleteChecklist(deleteTargetId);
+        toast.success('Checklist deleted');
+      } else if (deleteType === 'todo') {
+        await deleteTodo(deleteTargetId);
+        toast.success('Todo deleted');
       }
+    } catch (err) {
+      console.error('Delete failed:', err);
+      toast.error(`Failed to delete ${deleteType}`);
+    } finally {
+      setDeleteLoading(false);
+      setDeleteType(null);
+      setDeleteTargetId(null);
     }
   };
 
@@ -154,29 +226,6 @@ export default function ProjectDetail() {
       await updateTodo(todoId, updates);
     } catch {
       toast.error('Failed to update task');
-    }
-  };
-
-  const handleDeleteChecklist = async (e: React.MouseEvent, cid: string) => {
-    e.stopPropagation();
-    if (confirm('Delete this checklist?')) {
-      try {
-        await deleteChecklist(cid);
-        toast.success('Checklist deleted');
-      } catch {
-        toast.error('Failed to delete checklist');
-      }
-    }
-  };
-
-  const handleDeleteTodo = async (tid: string) => {
-    if (confirm('Delete this todo?')) {
-      try {
-        await deleteTodo(tid);
-        toast.success('Todo deleted');
-      } catch {
-        toast.error('Failed to delete todo');
-      }
     }
   };
 
@@ -253,7 +302,7 @@ export default function ProjectDetail() {
                  <Button onClick={() => setIsShareDialogOpen(true)} className="bento-button bg-slate-900 text-white h-12 px-6">
                    <Share2 className="w-4 h-4 mr-2" /> Share Project
                  </Button>
-                 <Button onClick={handleDeleteProject} variant="outline" className="bento-button border-2 border-rose-600 text-rose-600 hover:bg-rose-600 hover:text-white h-12 px-6">
+                 <Button onClick={handlePromptDeleteProject} variant="outline" className="bento-button border-2 border-rose-600 text-rose-600 hover:bg-rose-600 hover:text-white h-12 px-6">
                    <Trash2 className="w-4 h-4 mr-2" /> Dissolve
                  </Button>
                </div>
@@ -293,9 +342,26 @@ export default function ProjectDetail() {
                  <Plus className="w-4 h-4 mr-2" /> Add Checklist
                </Button>
             ) : (
-               <Button onClick={() => setIsTodoDialogOpen(true)} className="bento-button bg-emerald-600 text-white font-black uppercase text-xs h-12 px-6">
-                 <Plus className="w-4 h-4 mr-2" /> New Task
-               </Button>
+               <div className="flex gap-2">
+                 <Button 
+                   variant="outline" 
+                   onClick={() => {
+                     if (todos.length === 0) {
+                       toast.error('Nothing to copy');
+                       return;
+                     }
+                     const md = generateMarkdown(todos);
+                     navigator.clipboard.writeText(md);
+                     toast.success('Operations copied as Markdown');
+                   }} 
+                   className="bento-button bg-white text-slate-900 border-2 border-slate-900 font-black uppercase text-xs h-12 px-4 shadow-bento hover:bg-slate-50 transition-colors"
+                 >
+                   <Copy className="w-4 h-4 mr-2" /> Copy MD
+                 </Button>
+                 <Button onClick={() => setIsTodoDialogOpen(true)} className="bento-button bg-emerald-600 text-white font-black uppercase text-xs h-12 px-6">
+                   <Plus className="w-4 h-4 mr-2" /> New Task
+                 </Button>
+               </div>
             )}
           </div>
 
@@ -329,7 +395,7 @@ export default function ProjectDetail() {
                               </span>
                               <CardTitle className="text-xl font-black uppercase tracking-tight line-clamp-1 group-hover:text-indigo-600 transition-colors">{list.title}</CardTitle>
                             </div>
-                            <Button variant="ghost" size="icon" className="text-destructive opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => handleDeleteChecklist(e, list.id)}>
+                            <Button variant="ghost" size="icon" className="text-destructive opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => handleDeleteChecklistClick(e, list.id)}>
                               <Trash2 className="w-4 h-4" />
                             </Button>
                           </div>
@@ -374,7 +440,7 @@ export default function ProjectDetail() {
                       todo={todo}
                       onToggle={() => handleToggleTodo(todo.id, { isDone: !todo.isDone })}
                       onUpdate={(updates) => handleToggleTodo(todo.id, updates)}
-                      onDelete={() => handleDeleteTodo(todo.id)}
+                      onDelete={() => handleDeleteTodoClick(todo.id)}
                     />
                   ))}
                 </AnimatePresence>
@@ -441,6 +507,26 @@ export default function ProjectDetail() {
           </form>
         </DialogContent>
       </Dialog>
+      {/* Delete Confirmation Modal */}
+      <ConfirmDeleteModal
+        open={!!deleteType && !!deleteTargetId}
+        onOpenChange={(open) => {
+          if (!open) {
+            setDeleteType(null);
+            setDeleteTargetId(null);
+          }
+        }}
+        title={`Delete ${deleteType === 'project' ? 'Project' : deleteType === 'checklist' ? 'Checklist' : 'Task'}?`}
+        description={
+          deleteType === 'project'
+            ? 'Are you sure you want to dissolve this project? Checklists and tasks will lose their project association.'
+            : deleteType === 'checklist'
+            ? 'Are you sure you want to delete this checklist? All items and attachments will be permanently removed.'
+            : 'Are you sure you want to delete this task?'
+        }
+        onConfirm={handleConfirmDelete}
+        loading={deleteLoading}
+      />
     </div>
   );
 }

@@ -49,6 +49,11 @@ export interface Checklist {
   createdAt: Timestamp;
   updatedAt: Timestamp;
   position?: number;
+  isPinned?: boolean;
+  category?: string;
+  priority?: 'low' | 'medium' | 'high' | 'urgent';
+  dueDate?: string | null;
+  tags?: string[];
 }
 
 export interface ChecklistItem {
@@ -58,6 +63,7 @@ export interface ChecklistItem {
   description?: string;
   outcome?: string;
   isDone: boolean;
+  status?: 'pending' | 'pass' | 'fail' | 'na';
   photoUrl: string | null;
   photoUrls?: string[];
   isCollapsed?: boolean;
@@ -67,6 +73,11 @@ export interface ChecklistItem {
   fromTodo?: boolean;
   shareToken?: string | null;
   commentCount?: number;
+  priority?: 'low' | 'medium' | 'high' | 'urgent';
+  dueDate?: string | null;
+  assignee?: string | null;
+  estimatedMinutes?: number | null;
+  tags?: string[];
   // UI helpers
   children?: ChecklistItem[];
 }
@@ -91,6 +102,10 @@ export interface Todo {
   isDone: boolean;
   createdAt: Timestamp;
   updatedAt: Timestamp;
+  priority?: 'low' | 'medium' | 'high' | 'urgent';
+  dueDate?: string | null;
+  category?: string;
+  tags?: string[];
 }
 
 export interface FirestoreErrorInfo {

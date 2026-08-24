@@ -29,7 +29,7 @@ import { db, storage, auth } from '@/src/lib/firebase';
 import { Checklist, ChecklistItem, Todo, ItemComment, Project, ShareConfig } from '@/src/types';
 import { processImage } from '@/src/lib/imageProcessing';
 
-enum OperationType {
+export enum OperationType {
   CREATE = 'create',
   UPDATE = 'update',
   DELETE = 'delete',
@@ -38,7 +38,7 @@ enum OperationType {
   WRITE = 'write',
 }
 
-interface FirestoreErrorInfo {
+export interface FirestoreErrorInfo {
   error: string;
   operationType: OperationType;
   path: string | null;
@@ -55,7 +55,7 @@ interface FirestoreErrorInfo {
   }
 }
 
-function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null): never {
   const currentUser = auth.currentUser;
   const errInfo: FirestoreErrorInfo = {
     error: error instanceof Error ? error.message : String(error),
@@ -293,37 +293,34 @@ export async function deleteChecklist(checklistId: string) {
   const path = `checklists/${checklistId}`;
   try {
     const itemsSnapshot = await getDocs(collection(db, 'checklists', checklistId, 'items'));
-    const batch = writeBatch(db);
-    let operationCount = 0;
-    
-    // Collect photos for deletion
     const allPhotoUrls: string[] = [];
     
+    // Process each item and its subcollections individually to avoid batch permission/limit issues
     for (const itemDoc of itemsSnapshot.docs) {
       const item = itemDoc.data() as ChecklistItem;
       if (item.photoUrls) allPhotoUrls.push(...item.photoUrls);
       if (item.photoUrl) allPhotoUrls.push(item.photoUrl);
       
-      // Cleanup comments subcollection for each item
+      // Delete comments subcollection
       const commentsSnap = await getDocs(collection(db, 'checklists', checklistId, 'items', itemDoc.id, 'comments'));
-      commentsSnap.forEach(commentDoc => {
-        batch.delete(commentDoc.ref);
-        operationCount++;
-      });
+      for (const commentDoc of commentsSnap.docs) {
+        try {
+          await deleteDoc(commentDoc.ref);
+        } catch (e) {
+          console.warn('Failed to delete comment doc:', e);
+        }
+      }
       
-      batch.delete(itemDoc.ref);
-      operationCount++;
-      
-      if (operationCount > 450) { // Safety buffer before 500 limit
-        await batch.commit();
-        // Start a new batch if needed for large checklists
-        // (Note: In a production environment, we should recursion or use individual deletes if extremely large)
-        throw new Error('Checklist contains too many items/comments to delete in one operation. Please delete items individually.');
+      // Delete item
+      try {
+        await deleteDoc(itemDoc.ref);
+      } catch (e) {
+        console.warn('Failed to delete item doc:', e);
       }
     }
     
-    batch.delete(doc(db, 'checklists', checklistId));
-    await batch.commit();
+    // Finally delete parent checklist doc
+    await deleteDoc(doc(db, 'checklists', checklistId));
     
     // Cleanup photos in storage
     const uniqueUrls = Array.from(new Set(allPhotoUrls));
@@ -357,12 +354,20 @@ export function subscribeToItems(checklistId: string, callback: (items: Checklis
   });
 }
 
-export async function addItem(checklistId: string, text: string, position: number, parentId: string | null = null, shareToken?: string) {
+export async function addItem(
+  checklistId: string, 
+  text: string, 
+  position: number, 
+  parentId: string | null = null, 
+  shareToken?: string | null,
+  description?: string | null
+) {
   const path = `checklists/${checklistId}/items`;
   try {
     return await addDoc(collection(db, 'checklists', checklistId, 'items'), {
       checklistId,
       text,
+      description: description || null,
       isDone: false,
       photoUrl: null,
       photoUrls: [],
@@ -606,21 +611,39 @@ export async function upsertShareConfig(config: Omit<ShareConfig, 'id' | 'create
     const existingSnap = await getDocs(q);
     
     if (!existingSnap.empty) {
-      const docRef = existingSnap.docs[0].ref;
+      const existingDoc = existingSnap.docs[0];
+      const docRef = existingDoc.ref;
+      
+      const finalConfig = { 
+        ...config, 
+        token: existingDoc.id 
+      };
+
       await updateDoc(docRef, {
-        ...config,
-        updatedAt: serverTimestamp() // Note: types.ts should have updatedAt if needed, but blueprint uses createdAt. We'll stick to config data.
+        ...finalConfig,
+        updatedAt: serverTimestamp()
       });
-      return { id: docRef.id, ...config };
+
+      // Sync token back to the entity for rules resolution
+      const entityRef = doc(db, config.entityType === 'checklist' ? 'checklists' : config.entityType === 'project' ? 'projects' : 'todos', config.entityId);
+      await updateDoc(entityRef, { shareToken: finalConfig.token });
+
+      const finalDoc = await getDoc(docRef);
+      return { id: docRef.id, ...(finalDoc.data() as Omit<ShareConfig, 'id'>) };
     } else {
       const docRef = doc(collection(db, 'shareConfigs'), config.token);
       const payload = {
         ...config,
-        id: config.token,
         createdAt: serverTimestamp()
       };
       await setDoc(docRef, payload);
-      return payload;
+
+      // Sync token back to the entity for rules resolution
+      const entityRef = doc(db, config.entityType === 'checklist' ? 'checklists' : config.entityType === 'project' ? 'projects' : 'todos', config.entityId);
+      await updateDoc(entityRef, { shareToken: config.token });
+
+      const finalDoc = await getDoc(docRef);
+      return { id: docRef.id, ...(finalDoc.data() as Omit<ShareConfig, 'id'>) };
     }
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
@@ -638,8 +661,14 @@ export async function resolveShareToken(token: string) {
     
     // Check expiry
     if (share.expiresAt && share.expiresAt.toMillis() < Date.now()) {
-      // Auto-deactivate if expired
-      await updateDoc(doc(db, 'shareConfigs', token), { isActive: false });
+      // Auto-deactivate if expired (will only succeed if current user is the owner)
+      if (auth.currentUser && auth.currentUser.uid === share.createdBy) {
+        try {
+          await updateDoc(doc(db, 'shareConfigs', token), { isActive: false });
+        } catch (e) {
+          console.warn('Failed to auto-deactivate expired token:', e);
+        }
+      }
       return null;
     }
 
@@ -670,6 +699,12 @@ export async function resolveShareToken(token: string) {
 export async function revokeShare(token: string) {
   const path = `shareConfigs/${token}/revoke`;
   try {
+    const shareSnap = await getDoc(doc(db, 'shareConfigs', token));
+    if (shareSnap.exists()) {
+      const share = shareSnap.data() as ShareConfig;
+      const entityRef = doc(db, share.entityType === 'checklist' ? 'checklists' : share.entityType === 'project' ? 'projects' : 'todos', share.entityId);
+      await updateDoc(entityRef, { shareToken: deleteField() });
+    }
     await updateDoc(doc(db, 'shareConfigs', token), { isActive: false });
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
@@ -700,6 +735,8 @@ export function subscribeToShareConfig(entityId: string, callback: (config: Shar
     } else {
       callback(null);
     }
+  }, (error) => {
+    handleFirestoreError(error, OperationType.LIST, 'shareConfigs');
   });
 }
 
@@ -735,20 +772,37 @@ export function getGuestSessionToken() {
 
 export function subscribeToTodos(userId: string, callback: (todos: Todo[]) => void, projectId?: string | null) {
   const path = 'todos';
-  const q = query(
-    collection(db, 'todos'),
-    where('userId', '==', userId),
-    orderBy('createdAt', 'desc')
-  );
+  
+  let q;
+  if (projectId) {
+    q = query(
+      collection(db, 'todos'),
+      where('userId', '==', userId),
+      where('projectId', '==', projectId),
+      orderBy('createdAt', 'desc')
+    );
+  } else if (projectId === null) {
+    // Note: Firestore null queries can be tricky, but here we prefer to get all and filter
+    // if not using a dedicated "no project" index.
+    q = query(
+      collection(db, 'todos'),
+      where('userId', '==', userId),
+      orderBy('createdAt', 'desc')
+    );
+  } else {
+    q = query(
+      collection(db, 'todos'),
+      where('userId', '==', userId),
+      orderBy('createdAt', 'desc')
+    );
+  }
   
   return onSnapshot(q, (snapshot) => {
     let todos = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Todo));
 
-    // Client side filtering for better handling of missing/null projectId fields
+    // Client side filtering for null projectId cases
     if (projectId === null) {
       todos = todos.filter(t => !t.projectId);
-    } else if (projectId) {
-      todos = todos.filter(t => t.projectId === projectId);
     }
 
     callback(todos);
@@ -757,7 +811,7 @@ export function subscribeToTodos(userId: string, callback: (todos: Todo[]) => vo
   });
 }
 
-export async function createTodo(userId: string, title: string, note?: string, projectId: string | null = null, shareToken: string | null = null) {
+export async function createTodo(userId: string, title: string, note?: string, projectId: string | null = null, shareToken: string | null = null, category: string | null = null) {
   const path = 'todos';
   try {
     return await addDoc(collection(db, 'todos'), {
@@ -765,6 +819,7 @@ export async function createTodo(userId: string, title: string, note?: string, p
       projectId,
       title,
       note: note || null,
+      category: category || null,
       isDone: false,
       shareToken, // Project share token
       createdAt: serverTimestamp(),
@@ -900,6 +955,118 @@ export async function moveTodoToChecklist(todo: Todo, checklistId: string | 'new
     return targetChecklistId;
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function getProjects(userId: string) {
+  const path = 'projects';
+  try {
+    const q = query(
+      collection(db, 'projects'),
+      where('userId', '==', userId),
+      orderBy('createdAt', 'desc')
+    );
+    const snap = await getDocs(q);
+    return snap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Project));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, path);
+  }
+}
+
+export async function copyChecklist(checklistId: string, newTitle: string, targetProjectId: string | null = null, userId: string) {
+  const path = `checklists/${checklistId}/copy`;
+  try {
+    const checklistSnap = await getDoc(doc(db, 'checklists', checklistId));
+    if (!checklistSnap.exists()) {
+      throw new Error('Source checklist not found');
+    }
+    const sourceChecklist = checklistSnap.data();
+
+    const newChecklistRef = doc(collection(db, 'checklists'));
+    await setDoc(newChecklistRef, {
+      userId,
+      projectId: targetProjectId,
+      title: newTitle,
+      description: sourceChecklist.description || '',
+      status: 'active',
+      shareToken: null,
+      position: 0,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp()
+    });
+
+    const itemsSnap = await getDocs(collection(db, 'checklists', checklistId, 'items'));
+    const sourceItems = itemsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }) as ChecklistItem);
+
+    const itemIdMap: { [oldId: string]: string } = {};
+
+    const getDepth = (item: ChecklistItem): number => {
+      let depth = 0;
+      let current = item;
+      while (current.parentId) {
+        depth++;
+        const parent = sourceItems.find(i => i.id === current.parentId);
+        if (!parent || parent.id === current.id) break;
+        current = parent;
+      }
+      return depth;
+    };
+
+    const itemsWithDepth = sourceItems.map(item => ({
+      item,
+      depth: getDepth(item)
+    }));
+
+    itemsWithDepth.sort((a, b) => a.depth - b.depth);
+
+    const batch = writeBatch(db);
+    let opCount = 0;
+
+    for (const { item } of itemsWithDepth) {
+      const newItemRef = doc(collection(db, 'checklists', newChecklistRef.id, 'items'));
+      itemIdMap[item.id] = newItemRef.id;
+
+      const parentId = item.parentId ? (itemIdMap[item.parentId] || null) : null;
+
+      batch.set(newItemRef, {
+        checklistId: newChecklistRef.id,
+        text: item.text,
+        description: item.description || null,
+        outcome: item.outcome || 'none',
+        isDone: false,
+        photoUrl: null,
+        photoUrls: [],
+        isCollapsed: item.isCollapsed || false,
+        position: item.position ?? 0,
+        parentId,
+        createdAt: serverTimestamp()
+      });
+
+      opCount++;
+      if (opCount >= 450) {
+        // commit safety
+      }
+    }
+
+    if (opCount > 0) {
+      await batch.commit();
+    }
+
+    return newChecklistRef;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function moveChecklist(checklistId: string, targetProjectId: string | null) {
+  const path = `checklists/${checklistId}/move`;
+  try {
+    return await updateDoc(doc(db, 'checklists', checklistId), {
+      projectId: targetProjectId,
+      updatedAt: serverTimestamp()
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
   }
 }
 

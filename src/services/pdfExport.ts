@@ -9,47 +9,66 @@ interface PDFExportOptions {
 
 /**
  * Efficiently loads an image from a URL and returns a Data URL with dimensions.
- * Handles CORS by using fetch + blob + reader.
+ * Handles CORS by trying multiple loading strategies.
  */
 async function getImageDataUrl(url: string, maxWidth = 800): Promise<{ dataUrl: string; width: number; height: number } | null> {
   if (!url) return null;
   
-  try {
-    // Attempt 1: Fetch as blob (Best for CORS if server allows)
-    const response = await fetch(url, { mode: 'cors' });
-    if (!response.ok) {
-      throw new Error(`Fetch failed with status: ${response.status}`);
-    }
-    const blob = await response.blob();
-    
-    // Create an image element to get dimensions and resize if needed
-    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-      const i = new Image();
-      const objectUrl = URL.createObjectURL(blob);
-      i.onload = () => {
-        URL.revokeObjectURL(objectUrl);
-        resolve(i);
-      };
-      i.onerror = (e) => {
-        URL.revokeObjectURL(objectUrl);
-        reject(e);
-      };
-      i.src = objectUrl;
-    });
-
-    return processCanvasImage(img, maxWidth);
-  } catch (error) {
-    console.warn("Primary image fetch failed, trying alternate method:", url, error);
-    
-    // Attempt 2: Load directly with crossOrigin="anonymous" (Fallback)
+  // Quick check for base64
+  if (url.startsWith('data:')) {
     try {
       const img = await new Promise<HTMLImageElement>((resolve, reject) => {
         const i = new Image();
-        i.crossOrigin = "anonymous";
         i.onload = () => resolve(i);
-        i.onerror = (e) => reject(e);
+        i.onerror = reject;
         i.src = url;
       });
+      return processCanvasImage(img, maxWidth);
+    } catch (e) {
+      console.error("Failed to process base64 image:", e);
+      return null;
+    }
+  }
+
+  // Attempt 1: Load directly with crossOrigin (Usually more resilient in proxied environments)
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const i = new Image();
+      i.crossOrigin = "anonymous";
+      i.referrerPolicy = "no-referrer";
+      i.onload = () => resolve(i);
+      i.onerror = (e) => reject(e);
+      i.src = url;
+    });
+    return processCanvasImage(img, maxWidth);
+  } catch (error) {
+    console.warn("Direct image load failed, trying fetch strategy:", url, error);
+    
+    // Attempt 2: Fetch as blob (Fallback)
+    try {
+      // Use cache buster only as a last resort if first attempts fail
+      const fetchUrl = url.includes('?') ? `${url}&t=${Date.now()}` : `${url}?t=${Date.now()}`;
+      const response = await fetch(fetchUrl, { mode: 'cors' });
+      
+      if (!response.ok) {
+        throw new Error(`Fetch failed with status: ${response.status}`, { cause: error });
+      }
+      const blob = await response.blob();
+      
+      const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const i = new Image();
+        const objectUrl = URL.createObjectURL(blob);
+        i.onload = () => {
+          URL.revokeObjectURL(objectUrl);
+          resolve(i);
+        };
+        i.onerror = (e) => {
+          URL.revokeObjectURL(objectUrl);
+          reject(e);
+        };
+        i.src = objectUrl;
+      });
+
       return processCanvasImage(img, maxWidth);
     } catch (err2) {
       console.error("All image load methods failed for:", url, err2);
@@ -249,26 +268,83 @@ export async function exportChecklistToPDF({ checklist, items, onProgress }: PDF
 
     // Photos for this item
     const photos = imageMap.get(item.id) || [];
-    for (const asset of photos) {
-      const targetWidth = Math.min(80, contentWidth - indent - 20);
-      const maxHeight = 60;
-      let w = targetWidth;
-      let h = (asset.height / asset.width) * w;
+    const availableWidth = contentWidth - indent - 23;
+    const gap = 5;
+    
+    let i = 0;
+    while (i < photos.length) {
+      const asset = photos[i];
+      const aspectRatio = asset.width / asset.height;
+      const isPortrait = aspectRatio < 0.8;
       
-      if (h > maxHeight) {
-        h = maxHeight;
-        w = (asset.width / asset.height) * h;
+      // Look ahead to see if we can pair this portrait image with another one
+      let canPair = false;
+      if (isPortrait && i + 1 < photos.length) {
+        const nextAsset = photos[i + 1];
+        const nextAspectRatio = nextAsset.width / nextAsset.height;
+        if (nextAspectRatio < 0.8) {
+          canPair = true;
+        }
       }
 
-      if (y + h > pageHeight - margin) {
-        doc.addPage();
-        y = margin;
-      }
+      if (canPair) {
+        const nextAsset = photos[i + 1];
+        const slotWidth = (availableWidth - gap) / 2;
+        
+        // Calculate heights for both to keep them balanced
+        const maxHeight = 100;
+        let h1 = (asset.height / asset.width) * slotWidth;
+        let h2 = (nextAsset.height / nextAsset.width) * slotWidth;
+        
+        if (h1 > maxHeight) h1 = maxHeight;
+        if (h2 > maxHeight) h2 = maxHeight;
+        
+        const w1 = (asset.width / asset.height) * h1;
+        const w2 = (nextAsset.width / nextAsset.height) * h2;
 
-      doc.setDrawColor(226, 232, 240); // slate-200
-      doc.rect(margin + indent + 23 - 1, y - 1, w + 2, h + 2); // Thin border
-      doc.addImage(asset.dataUrl, 'JPEG', margin + indent + 23, y, w, h);
-      y += h + 8;
+        const maxH = Math.max(h1, h2);
+
+        if (y + maxH > pageHeight - margin) {
+          doc.addPage();
+          y = margin;
+        }
+
+        // Slot 1
+        const x1 = margin + indent + 23 + (slotWidth - w1) / 2;
+        doc.setDrawColor(241, 245, 249);
+        doc.rect(x1 - 0.5, y - 0.5, w1 + 1, h1 + 1);
+        doc.addImage(asset.dataUrl, 'JPEG', x1, y, w1, h1);
+
+        // Slot 2
+        const x2 = margin + indent + 23 + slotWidth + gap + (slotWidth - w2) / 2;
+        doc.rect(x2 - 0.5, y - 0.5, w2 + 1, h2 + 1);
+        doc.addImage(nextAsset.dataUrl, 'JPEG', x2, y, w2, h2);
+
+        y += maxH + 8;
+        i += 2;
+      } else {
+        // Single image
+        const maxHeight = 120;
+        let w = availableWidth;
+        let h = (asset.height / asset.width) * w;
+        
+        if (h > maxHeight) {
+          h = maxHeight;
+          w = (asset.width / asset.height) * h;
+        }
+
+        if (y + h > pageHeight - margin) {
+          doc.addPage();
+          y = margin;
+        }
+
+        const x = margin + indent + 23 + (availableWidth - w) / 2;
+        doc.setDrawColor(241, 245, 249);
+        doc.rect(x - 0.5, y - 0.5, w + 1, h + 1);
+        doc.addImage(asset.dataUrl, 'JPEG', x, y, w, h);
+        y += h + 8;
+        i++;
+      }
     }
 
     if (photos.length === 0 && !item.description) {
